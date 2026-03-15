@@ -1,0 +1,80 @@
+package io.github.garyquinn.kmpble.peripheral.internal
+
+import io.github.garyquinn.kmpble.Identifier
+import io.github.garyquinn.kmpble.connection.State
+import io.github.garyquinn.kmpble.connection.internal.ConnectionEvent
+import io.github.garyquinn.kmpble.connection.internal.StateMachine
+import io.github.garyquinn.kmpble.gatt.DiscoveredService
+import io.github.garyquinn.kmpble.gatt.internal.GattOperationQueue
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
+
+internal class PeripheralContext(val identifier: Identifier) {
+
+    val dispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1)
+    val scope = CoroutineScope(
+        SupervisorJob() + dispatcher + CoroutineName("Peripheral/${identifier.value}")
+    )
+
+    private val _state = MutableStateFlow(State.Disconnected.ByRequest as State)
+    val state: StateFlow<State> = _state.asStateFlow()
+
+    private val _services = MutableStateFlow<List<DiscoveredService>?>(null)
+    val services: StateFlow<List<DiscoveredService>?> = _services.asStateFlow()
+
+    private val _maximumWriteValueLength = MutableStateFlow(20) // ATT_MTU 23 - 3
+    val maximumWriteValueLength: StateFlow<Int> = _maximumWriteValueLength.asStateFlow()
+
+    val gattQueue = GattOperationQueue(scope)
+
+    private var closed = false
+
+    /**
+     * Process a state machine event. Always runs on the peripheral's serialized dispatcher.
+     * Returns the new state. Invalid transitions are logged and ignored (no crash).
+     */
+    suspend fun processEvent(event: ConnectionEvent): State = withContext(dispatcher) {
+        check(!closed) { "PeripheralContext is closed" }
+
+        val result = StateMachine.transition(_state.value, event)
+        if (!result.valid) {
+            return@withContext _state.value
+        }
+
+        _state.value = result.newState
+
+        if (result.newState is State.Disconnected) {
+            gattQueue.drain()
+            _services.value = null
+        }
+
+        result.newState
+    }
+
+    suspend fun updateServices(discovered: List<DiscoveredService>) = withContext(dispatcher) {
+        _services.value = discovered
+    }
+
+    suspend fun updateMtu(mtu: Int) = withContext(dispatcher) {
+        _maximumWriteValueLength.value = (mtu - 3).coerceAtLeast(20)
+    }
+
+    /**
+     * Terminal — release all resources. Non-suspend so Peripheral.close() can be synchronous
+     * (required for ViewModel.onCleared(), deinit, use {} blocks).
+     */
+    fun close() {
+        if (closed) return
+        closed = true
+        gattQueue.close()
+        scope.cancel()
+    }
+}

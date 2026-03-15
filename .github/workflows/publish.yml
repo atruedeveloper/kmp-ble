@@ -1,0 +1,26 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Build and test
+        run: ./gradlew build allTests
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+
+      - name: Publish to GitHub Packages
+        run: ./gradlew publish
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
