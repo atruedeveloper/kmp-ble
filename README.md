@@ -6,9 +6,9 @@ Kotlin Multiplatform BLE library for Android and iOS.
 
 ## Setup
 
-### Gradle (GitHub Packages)
+### Android / KMP (Gradle)
 
-Add the repository to your `settings.gradle.kts`:
+Add the GitHub Packages repository to your `settings.gradle.kts`:
 
 ```kotlin
 dependencyResolutionManagement {
@@ -36,12 +36,31 @@ kotlin {
 }
 ```
 
-### Composite build (source)
-
-Clone this repo alongside your project and add to `settings.gradle.kts`:
+Initialize in your `Application.onCreate()` (Android only):
 
 ```kotlin
-includeBuild("../kmp-ble")
+class MyApp : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        KmpBle.init(this)
+    }
+}
+```
+
+### iOS (Swift Package Manager)
+
+In Xcode: **File > Add Package Dependencies** and enter:
+
+```
+https://github.com/gary-quinn/kmp-ble
+```
+
+Select the version and add `KmpBle` to your target.
+
+Then import in Swift:
+
+```swift
+import KmpBle
 ```
 
 ## Usage
