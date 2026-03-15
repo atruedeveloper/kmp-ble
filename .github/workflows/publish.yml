@@ -5,14 +5,12 @@ on:
     types: [published]
 
 permissions:
-  contents: read
+  contents: write
+  packages: write
 
 jobs:
   publish:
     runs-on: macos-latest
-    permissions:
-      contents: read
-      packages: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -34,3 +32,32 @@ jobs:
           VERSION: ${{ github.event.release.tag_name }}
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build XCFramework
+        run: ./gradlew assembleXCFramework
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+
+      - name: Zip XCFramework
+        run: |
+          cd build/XCFrameworks/release
+          zip -r KmpBle.xcframework.zip KmpBle.xcframework
+
+      - name: Upload XCFramework to release
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} \
+            build/XCFrameworks/release/KmpBle.xcframework.zip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Package.swift
+        run: |
+          VERSION=${{ github.event.release.tag_name }}
+          CHECKSUM=$(swift package compute-checksum build/XCFrameworks/release/KmpBle.xcframework.zip)
+          sed -i '' "s|VERSION_PLACEHOLDER|${VERSION}|g" Package.swift
+          sed -i '' "s|CHECKSUM_PLACEHOLDER|${CHECKSUM}|g" Package.swift
+          git config user.email "gary@atruedev.com"
+          git config user.name "Gary Quinn"
+          git add Package.swift
+          git commit -m "update Package.swift for ${VERSION}"
+          git push origin HEAD:main

@@ -47,6 +47,30 @@ kotlin {
     }
 }
 
+tasks.register<Exec>("assembleXCFramework") {
+    dependsOn("linkReleaseFrameworkIosArm64", "linkReleaseFrameworkIosSimulatorArm64")
+    group = "build"
+    description = "Assembles KmpBle.xcframework from iOS release frameworks"
+
+    val outputDir = layout.buildDirectory.dir("XCFrameworks/release")
+    val arm64 = layout.buildDirectory.dir("bin/iosArm64/releaseFramework/KmpBle.framework")
+    val sim = layout.buildDirectory.dir("bin/iosSimulatorArm64/releaseFramework/KmpBle.framework")
+
+    doFirst {
+        outputDir.get().asFile.let { dir ->
+            dir.deleteRecursively()
+            dir.mkdirs()
+        }
+    }
+
+    commandLine(
+        "xcodebuild", "-create-xcframework",
+        "-framework", arm64.map { it.asFile.absolutePath }.get(),
+        "-framework", sim.map { it.asFile.absolutePath }.get(),
+        "-output", outputDir.map { File(it.asFile, "KmpBle.xcframework").absolutePath }.get(),
+    )
+}
+
 publishing {
     repositories {
         maven {
