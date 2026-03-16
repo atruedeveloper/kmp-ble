@@ -93,7 +93,7 @@ internal class AndroidBondManager(
             override fun onReceive(ctx: Context, intent: Intent) {
                 if (intent.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
 
-                val bondDevice = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                val bondDevice = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
                 if (bondDevice?.address != device.address) return
 
                 val state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)
