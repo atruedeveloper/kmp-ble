@@ -29,10 +29,10 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(project(":"))
-            implementation(compose.runtime)
-            implementation(compose.foundation)
-            implementation(compose.material3)
-            implementation(compose.ui)
+            implementation("org.jetbrains.compose.runtime:runtime:${libs.versions.composeMultiplatform.get()}")
+            implementation("org.jetbrains.compose.foundation:foundation:${libs.versions.composeMultiplatform.get()}")
+            implementation("org.jetbrains.compose.material3:material3:${libs.versions.composeMultiplatform.get()}")
+            implementation("org.jetbrains.compose.ui:ui:${libs.versions.composeMultiplatform.get()}")
             implementation(libs.lifecycle.viewmodel.compose)
             implementation(libs.lifecycle.runtime.compose)
             implementation(libs.kotlinx.coroutines.core)

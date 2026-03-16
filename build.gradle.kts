@@ -13,8 +13,17 @@ kotlin {
     compilerOptions {
         freeCompilerArgs.add("-opt-in=kotlin.uuid.ExperimentalUuidApi")
         freeCompilerArgs.add("-Xexpect-actual-classes")
-        freeCompilerArgs.add("-opt-in=kotlinx.cinterop.BetaInteropApi")
-        freeCompilerArgs.add("-opt-in=kotlinx.cinterop.ExperimentalForeignApi")
+    }
+
+    targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget> {
+        compilations.all {
+            compileTaskProvider.configure {
+                compilerOptions {
+                    freeCompilerArgs.add("-opt-in=kotlinx.cinterop.BetaInteropApi")
+                    freeCompilerArgs.add("-opt-in=kotlinx.cinterop.ExperimentalForeignApi")
+                }
+            }
+        }
     }
 
     android {
