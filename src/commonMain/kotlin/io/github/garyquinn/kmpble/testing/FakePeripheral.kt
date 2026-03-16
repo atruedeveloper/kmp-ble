@@ -70,6 +70,11 @@ public class FakePeripheral internal constructor(
         context.processEvent(ConnectionEvent.ConnectionLost(BleError.OperationFailed("disconnect")))
     }
 
+    @io.github.garyquinn.kmpble.ExperimentalBleApi
+    override fun removeBond(): io.github.garyquinn.kmpble.bonding.BondRemovalResult {
+        return io.github.garyquinn.kmpble.bonding.BondRemovalResult.NotSupported("FakePeripheral")
+    }
+
     override fun close() {
         if (closed) return
         closed = true

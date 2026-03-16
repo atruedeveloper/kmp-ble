@@ -1,6 +1,8 @@
 package io.github.garyquinn.kmpble.peripheral
 
+import io.github.garyquinn.kmpble.ExperimentalBleApi
 import io.github.garyquinn.kmpble.Identifier
+import io.github.garyquinn.kmpble.bonding.BondRemovalResult
 import io.github.garyquinn.kmpble.bonding.BondState
 import io.github.garyquinn.kmpble.connection.ConnectionOptions
 import io.github.garyquinn.kmpble.connection.State
@@ -26,6 +28,8 @@ public interface Peripheral : AutoCloseable {
     override fun close()
     public val state: StateFlow<State>
     public val bondState: StateFlow<BondState>
+    @ExperimentalBleApi
+    public fun removeBond(): BondRemovalResult
 
     // --- Discovery ---
     public val services: StateFlow<List<DiscoveredService>?>

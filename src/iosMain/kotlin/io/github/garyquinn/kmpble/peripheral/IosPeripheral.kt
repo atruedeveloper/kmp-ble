@@ -152,6 +152,13 @@ public class IosPeripheral(
         }
     }
 
+    @io.github.garyquinn.kmpble.ExperimentalBleApi
+    override fun removeBond(): io.github.garyquinn.kmpble.bonding.BondRemovalResult {
+        return io.github.garyquinn.kmpble.bonding.BondRemovalResult.NotSupported(
+            "iOS does not support programmatic bond removal. Remove from Settings > Bluetooth."
+        )
+    }
+
     override fun close() {
         if (closed) return
         closed = true

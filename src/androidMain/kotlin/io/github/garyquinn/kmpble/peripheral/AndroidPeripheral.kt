@@ -43,7 +43,7 @@ import kotlin.uuid.Uuid
 
 @OptIn(ExperimentalUuidApi::class)
 public class AndroidPeripheral(
-    device: BluetoothDevice,
+    private val device: BluetoothDevice,
     context: Context,
 ) : Peripheral {
 
@@ -69,6 +69,7 @@ public class AndroidPeripheral(
     override val maximumWriteValueLength: StateFlow<Int> get() = peripheralContext.maximumWriteValueLength
 
     private var closed = false
+    private var currentConnectionOptions: ConnectionOptions? = null
     private val reconnectionHandler = io.github.garyquinn.kmpble.connection.internal.ReconnectionHandler(
         scope = peripheralContext.scope,
         stateFlow = peripheralContext.state,
@@ -81,6 +82,7 @@ public class AndroidPeripheral(
 
     override suspend fun connect(options: ConnectionOptions) {
         checkNotClosed()
+        currentConnectionOptions = options
         reconnectionHandler.start(options)
         bondManager.start()
         withContext(peripheralContext.dispatcher) {
@@ -116,6 +118,7 @@ public class AndroidPeripheral(
     override suspend fun disconnect() {
         checkNotClosed()
         reconnectionHandler.stop()
+        bondManager.stop()
         withContext(peripheralContext.dispatcher) {
             if (peripheralContext.state.value is State.Disconnected) return@withContext
             peripheralContext.processEvent(ConnectionEvent.DisconnectRequested)
@@ -147,7 +150,7 @@ public class AndroidPeripheral(
     }
 
     @io.github.garyquinn.kmpble.ExperimentalBleApi
-    public suspend fun removeBond(): io.github.garyquinn.kmpble.bonding.BondRemovalResult {
+    override fun removeBond(): io.github.garyquinn.kmpble.bonding.BondRemovalResult {
         checkNotClosed()
         return bondManager.removeBond()
     }
@@ -235,6 +238,21 @@ public class AndroidPeripheral(
             BluetoothProfile.STATE_CONNECTED -> {
                 if (status.isSuccess()) {
                     peripheralContext.processEvent(ConnectionEvent.LinkEstablished)
+                    // Proactive bonding if Required and not already bonded
+                    val bondPref = currentConnectionOptions?.bondingPreference
+                    if (bondPref == io.github.garyquinn.kmpble.connection.BondingPreference.Required
+                        && device.bondState != BluetoothDevice.BOND_BONDED
+                    ) {
+                        peripheralContext.processEvent(ConnectionEvent.BondRequired)
+                        val bonded = bondManager.createBond()
+                        if (!bonded) {
+                            peripheralContext.processEvent(
+                                ConnectionEvent.BondFailed(BleError.ConnectionFailed("Bonding rejected"))
+                            )
+                            connectionComplete?.complete(Unit)
+                            return
+                        }
+                    }
                     bridge.discoverServices()
                 } else {
                     peripheralContext.processEvent(
