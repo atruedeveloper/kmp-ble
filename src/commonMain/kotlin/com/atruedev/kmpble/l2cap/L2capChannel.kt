@@ -37,11 +37,16 @@ import kotlinx.coroutines.flow.Flow
 public interface L2capChannel : AutoCloseable {
 
     /**
-     * The negotiated MTU for this channel.
+     * The MTU (Maximum Transmission Unit) for this channel.
      *
      * Maximum payload size for a single write operation.
      * Writes larger than this are segmented automatically by the OS.
      * Typical values: 2KB–64KB depending on peripheral and connection.
+     *
+     * **Note:** iOS does not expose the negotiated L2CAP MTU directly via
+     * `CBL2CAPChannel`. The value returned is a conservative default (2048 bytes).
+     * Callers performing chunked transfers (e.g., firmware updates) should treat
+     * this as an upper-bound hint, not a precise negotiated value.
      */
     public val mtu: Int
 
@@ -62,8 +67,10 @@ public interface L2capChannel : AutoCloseable {
      * - Completes normally when channel is closed (locally or remotely)
      * - Completes with exception if channel encounters an error
      *
-     * Backpressure: Buffered. If collector is slow, data accumulates
-     * in the OS buffer. When full, remote device is flow-controlled.
+     * Backpressure: Buffered internally. If the collector is slow, the
+     * read loop suspends until the buffer has capacity, which in turn
+     * stops draining the OS stream buffer and triggers L2CAP flow control
+     * on the remote device.
      */
     public val incoming: Flow<ByteArray>
 

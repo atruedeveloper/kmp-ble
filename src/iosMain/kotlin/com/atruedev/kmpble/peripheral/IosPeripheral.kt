@@ -32,9 +32,12 @@ import com.atruedev.kmpble.scanner.uuidFrom
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -76,7 +79,7 @@ public class IosPeripheral(
 
     // L2CAP state
     private var pendingL2capChannel: CompletableDeferred<CBL2CAPChannel>? = null
-    private val activeL2capChannels = mutableListOf<IosL2capChannel>()
+    private val activeL2capChannels = MutableStateFlow<List<IosL2capChannel>>(emptyList())
 
     override val state: StateFlow<State> get() = peripheralContext.state
     override val bondState: StateFlow<com.atruedev.kmpble.bonding.BondState> get() = peripheralContext.bondState
@@ -588,6 +591,9 @@ public class IosPeripheral(
         }
 
         return withContext(peripheralContext.dispatcher) {
+            if (pendingL2capChannel != null) {
+                throw L2capException.OpenFailed(psm, "Another L2CAP channel open is already in progress")
+            }
             val deferred = CompletableDeferred<CBL2CAPChannel>()
             pendingL2capChannel = deferred
 
@@ -598,7 +604,7 @@ public class IosPeripheral(
                     deferred.await()
                 }
                 val channel = IosL2capChannel(cbChannel, peripheralContext.scope)
-                activeL2capChannels.add(channel)
+                activeL2capChannels.update { it + channel }
                 channel
             } catch (_: TimeoutCancellationException) {
                 pendingL2capChannel = null
@@ -634,8 +640,8 @@ public class IosPeripheral(
     }
 
     private fun closeL2capChannels() {
-        activeL2capChannels.forEach { it.close() }
-        activeL2capChannels.clear()
+        val channels = activeL2capChannels.getAndUpdate { emptyList() }
+        channels.forEach { it.close() }
     }
 
     private fun onDisconnectCleanup() {

@@ -29,7 +29,7 @@ public class FakeL2capChannel(
     override val mtu: Int = 2048,
 ) : L2capChannel {
 
-    private val _incoming = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
+    private val _incoming = MutableSharedFlow<ByteArray>(replay = 1, extraBufferCapacity = 64)
     override val incoming: Flow<ByteArray> = _incoming.asSharedFlow()
 
     private var _isOpen = true
@@ -48,7 +48,9 @@ public class FakeL2capChannel(
 
     /**
      * Inject incoming data as if received from the remote device.
-     * Requires an active collector on [incoming].
+     *
+     * The most recent emission is replayed to late collectors (replay = 1),
+     * so tests don't need to guarantee collector startup ordering.
      */
     public suspend fun emitIncoming(data: ByteArray) {
         _incoming.emit(data)

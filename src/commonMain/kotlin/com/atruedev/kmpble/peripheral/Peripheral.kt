@@ -131,8 +131,13 @@ public interface Peripheral : AutoCloseable {
      * ```
      *
      * @param psm Protocol/Service Multiplexer identifying the L2CAP service
-     * @param secure If true, requires encrypted connection (default: true).
-     *               On iOS, security is determined by the connection-level encryption.
+     * @param secure If true, requires an encrypted connection (default: true).
+     *               **Platform behavior varies:**
+     *               - **iOS:** This parameter is ignored. CoreBluetooth determines
+     *                 encryption at the connection level, not per-channel. All L2CAP
+     *                 channels inherit the connection's security level.
+     *               - **Android:** When true, uses `createL2capChannel()` (encrypted);
+     *                 when false, uses `createInsecureL2capChannel()`.
      * @return Open L2CAP channel ready for communication
      * @throws com.atruedev.kmpble.l2cap.L2capException.NotConnected if peripheral is not connected
      * @throws com.atruedev.kmpble.l2cap.L2capException.OpenFailed if channel cannot be opened

@@ -22,6 +22,7 @@ import platform.CoreBluetooth.CBL2CAPChannel
 import platform.Foundation.NSStreamStatusAtEnd
 import platform.Foundation.NSStreamStatusClosed
 import platform.Foundation.NSStreamStatusError
+import platform.Foundation.NSStreamStatusOpen
 
 internal class IosL2capChannel(
     private val cbChannel: CBL2CAPChannel,
@@ -41,12 +42,21 @@ internal class IosL2capChannel(
     private val readJob: Job
 
     init {
+        val inputOk = cbChannel.inputStream?.streamStatus == NSStreamStatusOpen
+        val outputOk = cbChannel.outputStream?.streamStatus == NSStreamStatusOpen
+        if (!inputOk || !outputOk) {
+            _isOpen.value = false
+            dataChannel.close()
+        }
+
         readJob = scope.launch(Dispatchers.Default) {
             readLoop()
         }
     }
 
     private suspend fun readLoop() {
+        if (!_isOpen.value) return
+
         val inputStream = cbChannel.inputStream ?: run {
             _isOpen.value = false
             dataChannel.close()
@@ -55,6 +65,7 @@ internal class IosL2capChannel(
 
         val bufferSize = READ_BUFFER_SIZE
         val buffer = ByteArray(bufferSize)
+        var consecutiveIdlePolls = 0
 
         try {
             while (_isOpen.value) {
@@ -72,12 +83,14 @@ internal class IosL2capChannel(
                         ).toInt()
 
                         when {
-                            bytesRead > 0 -> dataChannel.trySend(buffer.copyOf(bytesRead))
+                            bytesRead > 0 -> dataChannel.send(buffer.copyOf(bytesRead))
                             bytesRead < 0 -> return // Error or EOF — exit readLoop
                         }
                     }
+                    consecutiveIdlePolls = 0
                 } else {
-                    delay(POLL_INTERVAL_MS)
+                    consecutiveIdlePolls++
+                    delay(currentPollInterval(consecutiveIdlePolls))
                 }
             }
         } finally {
@@ -117,7 +130,7 @@ internal class IosL2capChannel(
 
                     totalWritten += written
                     if (written == 0 && totalWritten < data.size) {
-                        delay(POLL_INTERVAL_MS)
+                        delay(MIN_POLL_INTERVAL_MS)
                     }
                 }
             }
@@ -131,7 +144,10 @@ internal class IosL2capChannel(
         dataChannel.close()
     }
 
+    private val _streamsClosed = MutableStateFlow(false)
+
     private fun closeStreams() {
+        if (!_streamsClosed.compareAndSet(expect = false, update = true)) return
         cbChannel.inputStream?.close()
         cbChannel.outputStream?.close()
     }
@@ -139,6 +155,12 @@ internal class IosL2capChannel(
     private companion object {
         const val DEFAULT_MTU = 2048
         const val READ_BUFFER_SIZE = 4096
-        const val POLL_INTERVAL_MS = 10L
+        const val MIN_POLL_INTERVAL_MS = 10L
+        const val MAX_POLL_INTERVAL_MS = 100L
+
+        fun currentPollInterval(consecutiveIdlePolls: Int): Long {
+            val interval = MIN_POLL_INTERVAL_MS shl consecutiveIdlePolls.coerceAtMost(3)
+            return interval.coerceAtMost(MAX_POLL_INTERVAL_MS)
+        }
     }
 }
