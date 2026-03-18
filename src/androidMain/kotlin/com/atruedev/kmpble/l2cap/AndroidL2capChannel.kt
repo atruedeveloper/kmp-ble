@@ -1,7 +1,5 @@
 package com.atruedev.kmpble.l2cap
 
-import android.annotation.SuppressLint
-import android.bluetooth.BluetoothSocket
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,7 +16,7 @@ import java.io.OutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Android implementation of [L2capChannel] using [BluetoothSocket].
+ * Android implementation of [L2capChannel] backed by an [L2capSocket].
  *
  * The socket provides blocking [InputStream]/[OutputStream] which are wrapped
  * in coroutines for the suspend-based API.
@@ -32,11 +30,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * ## MTU
  *
  * Android's L2CAP CoC uses a default MTU of 672 bytes, but the actual negotiated
- * MTU is not exposed via public API. We use [BluetoothSocket.maxTransmitPacketSize]
- * (API 23+) as the write-side limit, falling back to a conservative default.
+ * MTU is not exposed via public API. We use [L2capSocket.maxTransmitPacketSize]
+ * as the write-side limit, falling back to a conservative default.
  */
 internal class AndroidL2capChannel(
-    private val socket: BluetoothSocket,
+    private val socket: L2capSocket,
     override val psm: Int,
     private val scope: CoroutineScope,
 ) : L2capChannel {
@@ -49,7 +47,6 @@ internal class AndroidL2capChannel(
     private val closedDeferred = CompletableDeferred<Unit>()
 
     override val mtu: Int
-        @SuppressLint("NewApi")
         get() = try {
             maxOf(socket.maxTransmitPacketSize, DEFAULT_MTU)
         } catch (_: Exception) {
@@ -140,7 +137,6 @@ internal class AndroidL2capChannel(
         closedDeferred.complete(Unit)
     }
 
-    @SuppressLint("NewApi")
     private fun closeSocket() {
         try {
             inputStream.close()
@@ -155,7 +151,7 @@ internal class AndroidL2capChannel(
         } catch (_: IOException) { }
     }
 
-    private companion object {
+    internal companion object {
         const val DEFAULT_MTU = 672
         const val READ_BUFFER_SIZE = 4096
     }

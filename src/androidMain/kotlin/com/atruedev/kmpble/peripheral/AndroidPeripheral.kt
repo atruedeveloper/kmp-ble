@@ -15,6 +15,7 @@ import com.atruedev.kmpble.connection.BondingPreference
 import com.atruedev.kmpble.connection.ConnectionOptions
 import com.atruedev.kmpble.connection.State
 import com.atruedev.kmpble.l2cap.AndroidL2capChannel
+import com.atruedev.kmpble.l2cap.BluetoothL2capSocket
 import com.atruedev.kmpble.l2cap.L2capChannel
 import com.atruedev.kmpble.l2cap.L2capException
 import com.atruedev.kmpble.connection.internal.ConnectionEvent
@@ -755,7 +756,7 @@ public class AndroidPeripheral internal constructor(
                     }
                 }
 
-                val channel = AndroidL2capChannel(socket, psm, peripheralContext.scope)
+                val channel = AndroidL2capChannel(BluetoothL2capSocket(socket), psm, peripheralContext.scope)
                 activeL2capChannels.update { it + channel }
 
                 peripheralContext.scope.launch {
