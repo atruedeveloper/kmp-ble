@@ -121,17 +121,8 @@ internal class AndroidL2capChannel(
 
         withContext(Dispatchers.IO) {
             try {
-                var totalWritten = 0
-                while (totalWritten < data.size) {
-                    if (closed.get()) {
-                        throw L2capException.ChannelClosed("Channel closed during write")
-                    }
-                    outputStream.write(data, totalWritten, data.size - totalWritten)
-                    totalWritten = data.size
-                    outputStream.flush()
-                }
-            } catch (e: L2capException) {
-                throw e
+                outputStream.write(data)
+                outputStream.flush()
             } catch (e: IOException) {
                 throw L2capException.WriteFailed(e.message ?: "Write failed", e)
             }
