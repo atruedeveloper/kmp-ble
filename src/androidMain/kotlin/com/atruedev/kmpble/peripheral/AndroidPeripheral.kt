@@ -8,12 +8,15 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothProfile
 import android.content.Context
+import android.os.Build
 import com.atruedev.kmpble.Identifier
 import com.atruedev.kmpble.bonding.BondState
 import com.atruedev.kmpble.connection.BondingPreference
 import com.atruedev.kmpble.connection.ConnectionOptions
 import com.atruedev.kmpble.connection.State
+import com.atruedev.kmpble.l2cap.AndroidL2capChannel
 import com.atruedev.kmpble.l2cap.L2capChannel
+import com.atruedev.kmpble.l2cap.L2capException
 import com.atruedev.kmpble.connection.internal.ConnectionEvent
 import com.atruedev.kmpble.error.ConnectionFailed
 import com.atruedev.kmpble.error.ConnectionLost
@@ -42,14 +45,20 @@ import com.atruedev.kmpble.logging.logEvent
 import com.atruedev.kmpble.peripheral.internal.PeripheralContext
 import com.atruedev.kmpble.peripheral.internal.PeripheralRegistry
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import java.io.IOException
+import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -231,6 +240,7 @@ public class AndroidPeripheral internal constructor(
         closed = true
         reconnectionHandler.stop()
         bondManager.stop()
+        closeL2capChannels()
         observationManager.clear()
         bridge.close()
         peripheralContext.close()
@@ -678,18 +688,95 @@ public class AndroidPeripheral internal constructor(
 
     // --- L2CAP ---
 
+    private val activeL2capChannels = MutableStateFlow<List<AndroidL2capChannel>>(emptyList())
+
+    /**
+     * Open an L2CAP Connection-Oriented Channel to this peripheral.
+     *
+     * Requires Android 10 (API 29) or higher. When [secure] is true, uses
+     * [BluetoothDevice.createL2capChannel] (encrypted); when false, uses
+     * [BluetoothDevice.createInsecureL2capChannel] (unencrypted).
+     *
+     * The [BLUETOOTH_CONNECT][android.Manifest.permission.BLUETOOTH_CONNECT]
+     * permission is required on Android 12+.
+     *
+     * All blocking socket I/O runs on [Dispatchers.IO]; the caller's coroutine
+     * context is never blocked.
+     */
     override suspend fun openL2capChannel(psm: Int, secure: Boolean): L2capChannel {
-        TODO("Android L2CAP implementation in next PR")
+        checkNotClosed()
+
+        val currentState = state.value
+        if (currentState !is State.Connected) {
+            throw L2capException.NotConnected("Peripheral is not connected (state: $currentState)")
+        }
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            throw L2capException.NotSupported("L2CAP channels require Android 10 (API 29) or higher")
+        }
+
+        return withContext(peripheralContext.dispatcher) {
+            try {
+                val socket = withContext(Dispatchers.IO) {
+                    if (secure) {
+                        device.createL2capChannel(psm)
+                    } else {
+                        device.createInsecureL2capChannel(psm)
+                    }
+                }
+
+                withContext(Dispatchers.IO) {
+                    withTimeout(L2CAP_OPEN_TIMEOUT) {
+                        try {
+                            socket.connect()
+                        } catch (e: IOException) {
+                            socket.close()
+                            throw L2capException.OpenFailed(psm, "Failed to connect: ${e.message}", e)
+                        }
+                    }
+                }
+
+                val channel = AndroidL2capChannel(socket, psm, peripheralContext.scope)
+
+                activeL2capChannels.update { it + channel }
+
+                peripheralContext.scope.launch {
+                    try {
+                        channel.incoming.collect { }
+                    } finally {
+                        activeL2capChannels.update { channels -> channels - channel }
+                    }
+                }
+
+                channel
+            } catch (e: L2capException) {
+                throw e
+            } catch (e: IOException) {
+                throw L2capException.OpenFailed(psm, e.message ?: "Unknown error", e)
+            } catch (e: SecurityException) {
+                throw L2capException.OpenFailed(psm, "Missing BLUETOOTH_CONNECT permission", e)
+            }
+        }
+    }
+
+    private fun closeL2capChannels() {
+        val channels = activeL2capChannels.getAndUpdate { emptyList() }
+        channels.forEach { it.close() }
     }
 
     private fun onDisconnectCleanup() {
         nativeCharMap.clear()
         nativeDescMap.clear()
+        closeL2capChannels()
         observationManager.onDisconnect()
         pendingOps.cancelAll(com.atruedev.kmpble.gatt.internal.NotConnectedException())
     }
 
     private fun checkNotClosed() {
         check(!closed) { "Peripheral is closed" }
+    }
+
+    private companion object {
+        val L2CAP_OPEN_TIMEOUT = 30.seconds
     }
 }
