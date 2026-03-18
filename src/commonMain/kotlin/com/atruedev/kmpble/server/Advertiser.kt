@@ -61,6 +61,36 @@ public interface Advertiser : AutoCloseable {
     override fun close()
 }
 
+/**
+ * Advertising mode controlling interval and power consumption.
+ *
+ * - [LowLatency]: ~100ms interval, highest power. Use for short bursts (pairing, discovery).
+ * - [Balanced]: ~250ms interval, moderate power. Good default for most use cases.
+ * - [LowPower]: ~1000ms interval, lowest power. Use for long-running background advertising.
+ */
+public enum class AdvertiseMode {
+    LowPower,
+    Balanced,
+    LowLatency,
+}
+
+/**
+ * Transmit power level for advertising.
+ *
+ * Higher power = longer range but more battery drain.
+ *
+ * - [UltraLow]: shortest range, minimal power.
+ * - [Low]: short range.
+ * - [Medium]: moderate range. Good default.
+ * - [High]: longest range, highest power.
+ */
+public enum class AdvertiseTxPower {
+    UltraLow,
+    Low,
+    Medium,
+    High,
+}
+
 public class AdvertiseConfig(
     /** Device name included in advertisement. Null = use system device name. */
     public val name: String? = null,
@@ -72,6 +102,10 @@ public class AdvertiseConfig(
     public val connectable: Boolean = true,
     /** Include TX power level in advertisement. */
     public val includeTxPower: Boolean = false,
+    /** Advertising mode controlling interval and power consumption. */
+    public val mode: AdvertiseMode = AdvertiseMode.Balanced,
+    /** Transmit power level. */
+    public val txPower: AdvertiseTxPower = AdvertiseTxPower.Medium,
 ) {
     public override fun equals(other: Any?): Boolean {
         if (this === other) return true

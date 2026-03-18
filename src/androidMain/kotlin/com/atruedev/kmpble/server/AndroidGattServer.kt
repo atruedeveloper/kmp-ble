@@ -139,6 +139,10 @@ internal class AndroidGattServer(
     private data class SubscriptionKey(val characteristicUuid: Uuid, val device: Identifier)
     private val subscriptionModes = mutableMapOf<SubscriptionKey, ByteArray>()
 
+    // Secondary index: characteristic UUID -> set of subscribed device identifiers.
+    // Maintained in sync with subscriptionModes for O(1) broadcast notify lookup.
+    private val subscribersByChar = mutableMapOf<Uuid, MutableSet<Identifier>>()
+
     // Track per-device MTU
     private val deviceMtu = mutableMapOf<Identifier, Int>()
 
@@ -175,10 +179,20 @@ internal class AndroidGattServer(
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> {
                         connectedDevices[deviceId] = device
+                        val connectionCount = connectedDevices.size
                         _connections.update { list ->
                             list + ServerConnection(deviceId, device.name)
                         }
-                        logEvent(BleLogEvent.ServerClientEvent(deviceId, "connected"))
+                        logEvent(BleLogEvent.ServerClientEvent(deviceId, "connected ($connectionCount total)"))
+                        if (connectionCount >= CONNECTION_WARNING_THRESHOLD) {
+                            logEvent(BleLogEvent.Error(
+                                deviceId,
+                                "High connection count ($connectionCount). Android typically supports " +
+                                    "7-15 concurrent BLE connections depending on device. New connections " +
+                                    "may be silently rejected.",
+                                null,
+                            ))
+                        }
                         if (!_connectionEvents.tryEmit(ServerConnectionEvent.Connected(deviceId))) {
                             logEvent(BleLogEvent.Error(deviceId, "Connection event buffer full, event dropped", null))
                         }
@@ -188,6 +202,9 @@ internal class AndroidGattServer(
                         deviceMtu.remove(deviceId)
                         // Remove all subscriptions for this device
                         subscriptionModes.keys.removeAll { it.device == deviceId }
+                        for ((_, subscribers) in subscribersByChar) {
+                            subscribers.remove(deviceId)
+                        }
                         _connections.update { list ->
                             list.filter { it.device != deviceId }
                         }
@@ -463,14 +480,9 @@ internal class AndroidGattServer(
                 }
                 listOf(connected)
             } else {
-                // All subscribed devices for this characteristic
-                // TODO: optimize for high connection counts with secondary index Map<Uuid, Set<Identifier>>
-                subscriptionModes.entries
-                    .filter { (key, value) ->
-                        key.characteristicUuid == characteristicUuid &&
-                            !value.contentEquals(BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE)
-                    }
-                    .mapNotNull { (key, _) -> connectedDevices[key.device] }
+                // All subscribed devices for this characteristic — O(1) lookup via secondary index
+                val subscribed = subscribersByChar[characteristicUuid] ?: emptySet()
+                subscribed.mapNotNull { connectedDevices[it] }
             }
 
             // Warn if notification payload exceeds any target's MTU
@@ -622,6 +634,7 @@ internal class AndroidGattServer(
         connectedDevices.clear()
         deviceMtu.clear()
         subscriptionModes.clear()
+        subscribersByChar.clear()
         characteristicCache.clear()
         readHandlers.clear()
         writeHandlers.clear()
@@ -690,9 +703,11 @@ internal class AndroidGattServer(
         val key = SubscriptionKey(characteristicUuid, deviceId)
         if (value.contentEquals(BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE)) {
             subscriptionModes.remove(key)
+            subscribersByChar[characteristicUuid]?.remove(deviceId)
             logEvent(BleLogEvent.ServerClientEvent(deviceId, "unsubscribed from $characteristicUuid"))
         } else {
             subscriptionModes[key] = value.copyOf()
+            subscribersByChar.getOrPut(characteristicUuid) { mutableSetOf() }.add(deviceId)
             val mode = when {
                 value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) -> "notifications"
                 value.contentEquals(BluetoothGattDescriptor.ENABLE_INDICATION_VALUE) -> "indications"
@@ -726,6 +741,7 @@ internal class AndroidGattServer(
         const val NOTIFY_TIMEOUT_MS = 5_000L
         const val DEFAULT_MTU = 23
         const val ATT_HEADER_SIZE = 3
+        const val CONNECTION_WARNING_THRESHOLD = 7
 
         // Global single-instance guard — Android supports one GATT server per app
         private val instanceLock = AtomicBoolean(false)

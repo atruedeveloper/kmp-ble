@@ -96,9 +96,9 @@ internal class AndroidAdvertiser(private val context: Context) : Advertiser {
             advertiser = bleAdvertiser
 
             val settings = AdvertiseSettings.Builder()
-                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+                .setAdvertiseMode(config.mode.toAndroidMode())
                 .setConnectable(config.connectable)
-                .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+                .setTxPowerLevel(config.txPower.toAndroidTxPower())
                 .setTimeout(0) // Advertise indefinitely
                 .build()
 
@@ -173,4 +173,17 @@ internal class AndroidAdvertiser(private val context: Context) : Advertiser {
             // Best-effort restore
         }
     }
+}
+
+private fun AdvertiseMode.toAndroidMode(): Int = when (this) {
+    AdvertiseMode.LowPower -> AdvertiseSettings.ADVERTISE_MODE_LOW_POWER
+    AdvertiseMode.Balanced -> AdvertiseSettings.ADVERTISE_MODE_BALANCED
+    AdvertiseMode.LowLatency -> AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY
+}
+
+private fun AdvertiseTxPower.toAndroidTxPower(): Int = when (this) {
+    AdvertiseTxPower.UltraLow -> AdvertiseSettings.ADVERTISE_TX_POWER_ULTRA_LOW
+    AdvertiseTxPower.Low -> AdvertiseSettings.ADVERTISE_TX_POWER_LOW
+    AdvertiseTxPower.Medium -> AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM
+    AdvertiseTxPower.High -> AdvertiseSettings.ADVERTISE_TX_POWER_HIGH
 }
