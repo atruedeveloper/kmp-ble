@@ -26,6 +26,8 @@ import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -35,10 +37,10 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.uuid.Uuid
 import kotlin.uuid.toJavaUuid
 import kotlin.uuid.toKotlinUuid
@@ -59,13 +61,23 @@ import kotlin.uuid.toKotlinUuid
  *
  * All mutable state is accessed exclusively on the serialized [dispatcher]
  * (limitedParallelism(1)). Binder-thread callbacks dispatch to [scope]
- * which runs on the same dispatcher. [close] also routes through the
- * dispatcher via [runBlocking] to ensure safe teardown.
+ * which runs on the same dispatcher.
  *
- * The only exception is [pendingNotifySent] — a [ConcurrentHashMap]
- * of per-device [CompletableDeferred] instances. The map is thread-safe
- * and [CompletableDeferred.complete] is thread-safe, so
- * [onNotificationSent] can safely call it from a Binder thread.
+ * [close] follows the AndroidPeripheral pattern: set the closed flag,
+ * close native resources synchronously (BluetoothGattServer.close() is
+ * thread-safe), then cancel the scope. No runBlocking — safe to call
+ * from any context including handler callbacks.
+ *
+ * Thread-safe fields accessed from Binder threads:
+ * - [pendingNotifySent]: ConcurrentHashMap, CompletableDeferred.complete is safe
+ * - [pendingServiceAdd]: @Volatile, CompletableDeferred.complete is safe
+ * - [isOpen]: @Volatile for visibility
+ *
+ * ## Single Instance
+ *
+ * Android supports only one BluetoothGattServer per app. Opening a second
+ * server while one is already open throws [ServerException.OpenFailed].
+ * Use [close] to release before opening another.
  *
  * ## Service Setup
  *
@@ -117,6 +129,9 @@ internal class AndroidGattServer(
     private val readHandlers = mutableMapOf<Uuid, suspend (Identifier) -> ByteArray>()
     private val writeHandlers = mutableMapOf<Uuid, suspend (Identifier, ByteArray, Boolean) -> GattStatus?>()
 
+    // O(1) lookup cache: characteristic UUID -> native characteristic (built during open)
+    private val characteristicCache = mutableMapOf<Uuid, BluetoothGattCharacteristic>()
+
     // Per-device pending onNotificationSent — ConcurrentHashMap because
     // onNotificationSent fires on a Binder thread and completes the deferred,
     // while notify/indicate write the entry from the serialized dispatcher.
@@ -125,7 +140,8 @@ internal class AndroidGattServer(
     // sending the next to the same device.
     private val pendingNotifySent = ConcurrentHashMap<String, CompletableDeferred<Int>>()
 
-    // Pending service addition (only used inside open(), always on dispatcher)
+    // Pending service addition — @Volatile because written on dispatcher, read on Binder thread
+    @Volatile
     private var pendingServiceAdd: CompletableDeferred<Int>? = null
 
     @Volatile
@@ -292,12 +308,20 @@ internal class AndroidGattServer(
             }
         }
 
+        override fun onExecuteWrite(device: BluetoothDevice, requestId: Int, execute: Boolean) {
+            // Prepared writes are rejected in onCharacteristicWriteRequest, but a
+            // misbehaving client may still send Execute Write. Respond immediately
+            // so the client doesn't hang waiting for a response.
+            sendResponseSafe(device, requestId, BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED, 0, null)
+        }
+
         override fun onNotificationSent(device: BluetoothDevice, status: Int) {
             // Called on Binder thread — ConcurrentHashMap + CompletableDeferred are both thread-safe
             pendingNotifySent.remove(device.address)?.complete(status)
         }
 
         override fun onServiceAdded(status: Int, service: BluetoothGattService) {
+            // Called on Binder thread — @Volatile + CompletableDeferred.complete is thread-safe
             pendingServiceAdd?.complete(status)
         }
 
@@ -314,63 +338,87 @@ internal class AndroidGattServer(
         withContext(dispatcher) {
             if (isOpen) return@withContext
 
+            // Single-instance enforcement
+            if (!instanceLock.compareAndSet(false, true)) {
+                throw ServerException.OpenFailed(
+                    "Another GattServer is already open. Android supports only one GATT server per app. " +
+                        "Call close() on the existing server before opening a new one.",
+                )
+            }
+
             logEvent(BleLogEvent.ServerLifecycle("opening"))
 
-            val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-                ?: throw ServerException.NotSupported("BluetoothManager not available")
-
-            val adapter = bluetoothManager.adapter
-                ?: throw ServerException.NotSupported("Bluetooth adapter not available")
-
-            if (!adapter.isEnabled) {
-                throw ServerException.OpenFailed("Bluetooth is not enabled")
+            try {
+                openInternal()
+            } catch (e: Exception) {
+                instanceLock.set(false)
+                throw e
             }
-
-            val server = try {
-                bluetoothManager.openGattServer(context, callback)
-            } catch (e: SecurityException) {
-                throw ServerException.OpenFailed("Missing BLUETOOTH_CONNECT permission", e)
-            } ?: throw ServerException.OpenFailed("openGattServer returned null")
-
-            nativeServer = server
-
-            // Register handlers from service definitions
-            for (serviceDef in serviceDefinitions) {
-                for (charDef in serviceDef.characteristics) {
-                    charDef.readHandler?.let { readHandlers[charDef.uuid] = it }
-                    charDef.writeHandler?.let { writeHandlers[charDef.uuid] = it }
-                }
-            }
-
-            // Add services sequentially (must wait for onServiceAdded for each)
-            for (serviceDef in serviceDefinitions) {
-                val nativeService = buildNativeService(serviceDef)
-                val deferred = CompletableDeferred<Int>()
-                pendingServiceAdd = deferred
-                if (!server.addService(nativeService)) {
-                    pendingServiceAdd = null
-                    throw ServerException.OpenFailed("addService returned false for ${serviceDef.uuid}")
-                }
-                val status = deferred.await()
-                pendingServiceAdd = null
-                if (status != BluetoothGatt.GATT_SUCCESS) {
-                    throw ServerException.OpenFailed(
-                        "addService failed for ${serviceDef.uuid} with status ${status.toGattStatus()}",
-                    )
-                }
-                logEvent(BleLogEvent.ServerLifecycle("service added: ${serviceDef.uuid}"))
-            }
-
-            isOpen = true
-            logEvent(BleLogEvent.ServerLifecycle("open (${serviceDefinitions.size} services)"))
         }
+    }
+
+    private suspend fun openInternal() {
+        val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            ?: throw ServerException.NotSupported("BluetoothManager not available")
+
+        val adapter = bluetoothManager.adapter
+            ?: throw ServerException.NotSupported("Bluetooth adapter not available")
+
+        if (!adapter.isEnabled) {
+            throw ServerException.OpenFailed("Bluetooth is not enabled")
+        }
+
+        val server = try {
+            bluetoothManager.openGattServer(context, callback)
+        } catch (e: SecurityException) {
+            throw ServerException.OpenFailed("Missing BLUETOOTH_CONNECT permission", e)
+        } ?: throw ServerException.OpenFailed("openGattServer returned null")
+
+        nativeServer = server
+
+        // Register handlers from service definitions
+        for (serviceDef in serviceDefinitions) {
+            for (charDef in serviceDef.characteristics) {
+                charDef.readHandler?.let { readHandlers[charDef.uuid] = it }
+                charDef.writeHandler?.let { writeHandlers[charDef.uuid] = it }
+            }
+        }
+
+        // Add services sequentially (must wait for onServiceAdded for each)
+        for (serviceDef in serviceDefinitions) {
+            val nativeService = buildNativeService(serviceDef)
+            val deferred = CompletableDeferred<Int>()
+            pendingServiceAdd = deferred
+            if (!server.addService(nativeService)) {
+                pendingServiceAdd = null
+                throw ServerException.OpenFailed("addService returned false for ${serviceDef.uuid}")
+            }
+            val status = deferred.await()
+            pendingServiceAdd = null
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                throw ServerException.OpenFailed(
+                    "addService failed for ${serviceDef.uuid} with status ${status.toGattStatus()}",
+                )
+            }
+            logEvent(BleLogEvent.ServerLifecycle("service added: ${serviceDef.uuid}"))
+        }
+
+        // Build O(1) characteristic lookup cache
+        for (service in server.services) {
+            for (char in service.characteristics) {
+                characteristicCache[char.uuid.toKotlinUuid()] = char
+            }
+        }
+
+        isOpen = true
+        logEvent(BleLogEvent.ServerLifecycle("open (${serviceDefinitions.size} services)"))
     }
 
     override suspend fun notify(characteristicUuid: Uuid, device: Identifier?, data: ByteArray) {
         withContext(dispatcher) {
             checkOpen()
             val server = nativeServer ?: throw ServerException.NotOpen()
-            val nativeChar = findNativeCharacteristic(characteristicUuid)
+            val nativeChar = characteristicCache[characteristicUuid]
                 ?: throw ServerException.NotifyFailed("Characteristic $characteristicUuid not found")
 
             val targets = if (device != null) {
@@ -393,13 +441,18 @@ internal class AndroidGattServer(
                     .mapNotNull { (key, _) -> connectedDevices[key.device] }
             }
 
-            for (target in targets) {
-                try {
-                    awaitNotifySend(server, target, nativeChar, data, confirm = false)
-                } catch (e: SecurityException) {
-                    throw ServerException.NotifyFailed("Missing BLUETOOTH_CONNECT permission", e)
+            // Send to all targets in parallel — Android only requires
+            // per-device serialization, not global serialization
+            targets.map { target ->
+                async {
+                    try {
+                        awaitNotifySend(server, target, nativeChar, data, confirm = false)
+                    } catch (e: SecurityException) {
+                        throw ServerException.NotifyFailed("Missing BLUETOOTH_CONNECT permission", e)
+                    }
                 }
-            }
+            }.awaitAll()
+
             logEvent(BleLogEvent.ServerRequest(
                 device ?: Identifier("broadcast"),
                 "notify (${data.size}B to ${targets.size} devices)",
@@ -412,7 +465,7 @@ internal class AndroidGattServer(
         withContext(dispatcher) {
             checkOpen()
             val server = nativeServer ?: throw ServerException.NotOpen()
-            val nativeChar = findNativeCharacteristic(characteristicUuid)
+            val nativeChar = characteristicCache[characteristicUuid]
                 ?: throw ServerException.NotifyFailed("Characteristic $characteristicUuid not found")
 
             val target = connectedDevices[device]
@@ -465,7 +518,7 @@ internal class AndroidGattServer(
 
         return try {
             withTimeout(NOTIFY_TIMEOUT_MS) { deferred.await() }
-        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+        } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
             pendingNotifySent.remove(device.address)
             throw ServerException.NotifyFailed(
                 if (confirm) "Indication timed out" else "Notification timed out",
@@ -473,35 +526,46 @@ internal class AndroidGattServer(
         }
     }
 
+    /**
+     * Close the server. Safe to call from any thread, including handler callbacks.
+     *
+     * Follows the AndroidPeripheral pattern: set closed flag, release native
+     * resources synchronously (BluetoothGattServer.close() is thread-safe),
+     * then cancel the scope. No runBlocking — no deadlock risk.
+     */
     override fun close() {
         if (!isOpen) return
+        isOpen = false
         logEvent(BleLogEvent.ServerLifecycle("closing"))
-        // Route teardown through the serialized dispatcher so in-flight
-        // callbacks finish before we clear state.
-        runBlocking(dispatcher) {
-            if (!isOpen) return@runBlocking
-            isOpen = false
 
-            try {
-                nativeServer?.close()
-            } catch (_: SecurityException) {
-                // Ignore permission errors on close
-            }
-            nativeServer = null
-            connectedDevices.clear()
-            deviceMtu.clear()
-            subscriptionModes.clear()
-            readHandlers.clear()
-            writeHandlers.clear()
-            _connections.value = emptyList()
-
-            // Cancel all pending notifications/indications
-            for ((_, deferred) in pendingNotifySent) {
-                deferred.cancel(kotlinx.coroutines.CancellationException("Server closed"))
-            }
-            pendingNotifySent.clear()
+        // Close native server first — stops all Binder callbacks
+        try {
+            nativeServer?.close()
+        } catch (_: SecurityException) {
+            // Ignore permission errors on close
         }
+        nativeServer = null
+
+        // Cancel all pending notifications/indications
+        for ((_, deferred) in pendingNotifySent) {
+            deferred.cancel(kotlinx.coroutines.CancellationException("Server closed"))
+        }
+        pendingNotifySent.clear()
+
+        // Cancel scope — all in-flight coroutines (handlers, connection events) stop
         scope.cancel()
+
+        // Reset state (no more coroutines can access these after scope.cancel)
+        connectedDevices.clear()
+        deviceMtu.clear()
+        subscriptionModes.clear()
+        characteristicCache.clear()
+        readHandlers.clear()
+        writeHandlers.clear()
+        _connections.value = emptyList()
+
+        // Release singleton lock
+        instanceLock.set(false)
         logEvent(BleLogEvent.ServerLifecycle("closed"))
     }
 
@@ -573,15 +637,6 @@ internal class AndroidGattServer(
         }
     }
 
-    private fun findNativeCharacteristic(uuid: Uuid): BluetoothGattCharacteristic? {
-        val server = nativeServer ?: return null
-        for (service in server.services) {
-            val char = service.getCharacteristic(uuid.toJavaUuid())
-            if (char != null) return char
-        }
-        return null
-    }
-
     private fun sendResponseSafe(
         device: BluetoothDevice,
         requestId: Int,
@@ -589,8 +644,7 @@ internal class AndroidGattServer(
         offset: Int,
         value: ByteArray?,
     ) {
-        // Device may have disconnected before we send the response
-        if (!connectedDevices.containsKey(Identifier(device.address))) return
+        if (!isOpen) return
         try {
             nativeServer?.sendResponse(device, requestId, status, offset, value)
         } catch (_: SecurityException) {
@@ -604,7 +658,10 @@ internal class AndroidGattServer(
 
     internal companion object {
         val CCCD_UUID: Uuid = com.atruedev.kmpble.scanner.uuidFrom("2902")
-        const val NOTIFY_TIMEOUT_MS = 10_000L
+        const val NOTIFY_TIMEOUT_MS = 5_000L
+
+        // Global single-instance guard — Android supports one GATT server per app
+        private val instanceLock = AtomicBoolean(false)
     }
 }
 

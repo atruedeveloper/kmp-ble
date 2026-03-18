@@ -17,10 +17,9 @@ import kotlin.uuid.Uuid
 /**
  * Fake GATT server for unit testing peripheral-role code.
  *
- * Allows tests to:
- * - Simulate client connections/disconnections
- * - Capture notify/indicate calls
- * - Verify server behavior without Bluetooth hardware
+ * Mirrors the real server's contract: operations require the server to be
+ * open, [notify] and [indicate] check device connection, and [indicate]
+ * requires [notify]/[indicate] to target connected devices only.
  *
  * ## Example
  *
@@ -54,11 +53,15 @@ public class FakeGattServer : GattServer {
 
     override suspend fun notify(characteristicUuid: Uuid, device: Identifier?, data: ByteArray) {
         checkOpen()
+        if (device != null) {
+            checkConnected(device)
+        }
         notifications.add(NotificationRecord(characteristicUuid, device, data.copyOf()))
     }
 
     override suspend fun indicate(characteristicUuid: Uuid, device: Identifier, data: ByteArray) {
         checkOpen()
+        checkConnected(device)
         indications.add(NotificationRecord(characteristicUuid, device, data.copyOf()))
     }
 
@@ -124,5 +127,11 @@ public class FakeGattServer : GattServer {
 
     private fun checkOpen() {
         if (!_isOpen) throw ServerException.NotOpen()
+    }
+
+    private fun checkConnected(device: Identifier) {
+        if (_connections.value.none { it.device == device }) {
+            throw ServerException.DeviceNotConnected("Device $device not connected")
+        }
     }
 }

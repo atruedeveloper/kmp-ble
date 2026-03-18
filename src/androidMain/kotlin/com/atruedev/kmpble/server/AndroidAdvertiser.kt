@@ -55,13 +55,20 @@ internal class AndroidAdvertiser(private val context: Context) : Advertiser {
     private var advertiser: BluetoothLeAdvertiser? = null
     private var originalAdapterName: String? = null
 
+    // Guards against TOCTOU race: two threads pass the _isAdvertising check
+    // before onStartSuccess fires. Set inside synchronized block, cleared on
+    // onStartSuccess/onStartFailure/stopAdvertising.
+    private var isStarting = false
+
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
+            synchronized(lock) { isStarting = false }
             _isAdvertising.value = true
             logEvent(BleLogEvent.ServerLifecycle("advertising started"))
         }
 
         override fun onStartFailure(errorCode: Int) {
+            synchronized(lock) { isStarting = false }
             _isAdvertising.value = false
             logEvent(BleLogEvent.Error(null, "Advertising start failed (error=$errorCode)", null))
         }
@@ -69,7 +76,7 @@ internal class AndroidAdvertiser(private val context: Context) : Advertiser {
 
     override fun startAdvertising(config: AdvertiseConfig) {
         synchronized(lock) {
-            if (_isAdvertising.value) {
+            if (_isAdvertising.value || isStarting) {
                 throw AdvertiserException.AlreadyAdvertising()
             }
 
@@ -117,9 +124,11 @@ internal class AndroidAdvertiser(private val context: Context) : Advertiser {
                 }
             }
 
+            isStarting = true
             try {
                 bleAdvertiser.startAdvertising(settings, dataBuilder.build(), advertiseCallback)
             } catch (e: SecurityException) {
+                isStarting = false
                 restoreAdapterName()
                 throw AdvertiserException.StartFailed("Missing BLUETOOTH_ADVERTISE permission", e)
             }
@@ -133,6 +142,7 @@ internal class AndroidAdvertiser(private val context: Context) : Advertiser {
             } catch (_: SecurityException) {
                 // Ignore permission errors on stop
             }
+            isStarting = false
             restoreAdapterName()
             _isAdvertising.value = false
             logEvent(BleLogEvent.ServerLifecycle("advertising stopped"))
@@ -146,6 +156,7 @@ internal class AndroidAdvertiser(private val context: Context) : Advertiser {
             } catch (_: SecurityException) {
                 // Ignore permission errors on stop
             }
+            isStarting = false
             restoreAdapterName()
             _isAdvertising.value = false
             advertiser = null

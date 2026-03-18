@@ -24,6 +24,7 @@ class FakeGattServerTest {
     fun notify_records_are_captured() = runTest {
         val server = FakeGattServer()
         server.open()
+        server.simulateConnection(device1)
 
         val data = byteArrayOf(0x01, 0x02, 0x03)
         server.notify(charUuid, device1, data)
@@ -39,6 +40,7 @@ class FakeGattServerTest {
     fun indicate_records_are_captured() = runTest {
         val server = FakeGattServer()
         server.open()
+        server.simulateConnection(device1)
 
         val data = byteArrayOf(0x04, 0x05)
         server.indicate(charUuid, device1, data)
@@ -120,6 +122,26 @@ class FakeGattServerTest {
     }
 
     @Test
+    fun notify_throws_DeviceNotConnected_for_unknown_device() = runTest {
+        val server = FakeGattServer()
+        server.open()
+
+        assertFailsWith<ServerException.DeviceNotConnected> {
+            server.notify(charUuid, device1, byteArrayOf(0x01))
+        }
+    }
+
+    @Test
+    fun indicate_throws_DeviceNotConnected_for_unknown_device() = runTest {
+        val server = FakeGattServer()
+        server.open()
+
+        assertFailsWith<ServerException.DeviceNotConnected> {
+            server.indicate(charUuid, device1, byteArrayOf(0x01))
+        }
+    }
+
+    @Test
     fun close_clears_connections() = runTest {
         val server = FakeGattServer()
         server.open()
@@ -149,6 +171,8 @@ class FakeGattServerTest {
     fun clearNotifications_removes_all_records() = runTest {
         val server = FakeGattServer()
         server.open()
+        server.simulateConnection(device1)
+        server.simulateConnection(device2)
 
         server.notify(charUuid, device1, byteArrayOf(0x01))
         server.notify(charUuid, device2, byteArrayOf(0x02))
@@ -162,6 +186,8 @@ class FakeGattServerTest {
     fun multiple_notify_calls_are_captured_in_order() = runTest {
         val server = FakeGattServer()
         server.open()
+        server.simulateConnection(device1)
+        server.simulateConnection(device2)
 
         server.notify(charUuid, device1, byteArrayOf(0x01))
         server.notify(charUuid, device2, byteArrayOf(0x02))
