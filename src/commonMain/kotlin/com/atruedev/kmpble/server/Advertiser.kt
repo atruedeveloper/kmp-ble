@@ -115,6 +115,8 @@ public class AdvertiseConfig(
             serviceUuids == other.serviceUuids &&
             connectable == other.connectable &&
             includeTxPower == other.includeTxPower &&
+            mode == other.mode &&
+            txPower == other.txPower &&
             manufacturerData.keys == other.manufacturerData.keys &&
             manufacturerData.all { (key, value) ->
                 other.manufacturerData[key]?.contentEquals(value) == true
@@ -129,11 +131,13 @@ public class AdvertiseConfig(
         }
         result = 31 * result + connectable.hashCode()
         result = 31 * result + includeTxPower.hashCode()
+        result = 31 * result + mode.hashCode()
+        result = 31 * result + txPower.hashCode()
         return result
     }
 
     public override fun toString(): String =
-        "AdvertiseConfig(name=$name, serviceUuids=$serviceUuids, connectable=$connectable, includeTxPower=$includeTxPower)"
+        "AdvertiseConfig(name=$name, serviceUuids=$serviceUuids, connectable=$connectable, includeTxPower=$includeTxPower, mode=$mode, txPower=$txPower)"
 }
 
 public expect fun Advertiser(): Advertiser
