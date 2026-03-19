@@ -327,25 +327,27 @@ internal class IosGattServer(
         scope.launch {
             try {
                 val data = handler(centralId)
+                val bleData = BleData(data)
 
                 val offset = request.offset.toInt()
-                if (offset > data.size) {
+                if (offset > bleData.size) {
                     peripheral.respondToRequest(request, withResult = CBATTErrorInvalidOffset)
                     return@launch
                 }
 
-                val responseData = if (offset > 0) {
-                    data.sliceArray(offset until data.size)
+                val responseNsData = if (offset > 0) {
+                    bleData.slice(offset, bleData.size).nsData
                 } else {
-                    data
+                    bleData.nsData
                 }
-                request.value = responseData.toNSData()
+                request.value = responseNsData
                 peripheral.respondToRequest(request, withResult = CBATTErrorSuccess)
 
+                val responseSize = responseNsData.length.toInt()
                 logEvent(
                     BleLogEvent.ServerRequest(
                         centralId,
-                        "read (${responseData.size}B, offset=$offset)",
+                        "read (${responseSize}B, offset=$offset)",
                         charUuid,
                         GattStatus.Success,
                     ),
