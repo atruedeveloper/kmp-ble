@@ -178,6 +178,8 @@ internal class IosGattServer(
     private suspend fun openInternal() {
         setDelegateCallbacks(active = true)
 
+        // Force lazy CBPeripheralManager init — the constructor fires
+        // peripheralManagerDidUpdateState on our delegate.
         manager
 
         try {
@@ -283,6 +285,10 @@ internal class IosGattServer(
 
         logEvent(BleLogEvent.ServerLifecycle("closing"))
 
+        // Stop accepting new callbacks before cancelling scope — prevents
+        // a GCD-queued callback from scope.launch-ing into a cancelled scope.
+        setDelegateCallbacks(active = false)
+
         manager.removeAllServices()
 
         readyToUpdate.cancel(kotlinx.coroutines.CancellationException("Server closed"))
@@ -295,8 +301,6 @@ internal class IosGattServer(
         readHandlers.clear()
         writeHandlers.clear()
         _connections.value = emptyList()
-
-        setDelegateCallbacks(active = false)
 
         instanceLock.value = 0
         logEvent(BleLogEvent.ServerLifecycle("closed"))
@@ -460,6 +464,11 @@ internal class IosGattServer(
     /**
      * Track a central as connected. Returns true if the central is newly discovered.
      * Must be called on [dispatcher].
+     *
+     * TODO: Centrals accumulate until [close] because K/N cannot override
+     *  didUnsubscribeFromCharacteristic separately from didSubscribeToCharacteristic
+     *  (identical Kotlin type signatures). For long-lived servers with many transient
+     *  clients, consider a periodic sweep or idle-timeout eviction.
      */
     private fun trackCentral(central: CBCentral): Boolean {
         val id = central.id
@@ -490,6 +499,9 @@ internal class IosGattServer(
             val sent = manager.updateValue(nsData, forCharacteristic = characteristic, onSubscribedCentrals = targets)
             if (sent) return
 
+            // Safe despite handleReadyToUpdate running on the GCD queue:
+            // if complete(Unit) fires between assignment and await(), await()
+            // returns immediately (CompletableDeferred is idempotent).
             readyToUpdate = CompletableDeferred()
             try {
                 withTimeout(NOTIFY_TIMEOUT) {
