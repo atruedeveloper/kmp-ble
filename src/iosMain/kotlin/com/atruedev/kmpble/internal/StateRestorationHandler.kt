@@ -1,8 +1,8 @@
 package com.atruedev.kmpble.internal
 
 import com.atruedev.kmpble.Identifier
-import com.atruedev.kmpble.gatt.internal.ObservationKey
 import com.atruedev.kmpble.gatt.internal.ObservationPersistence
+import com.atruedev.kmpble.gatt.internal.PersistedObservation
 import com.atruedev.kmpble.logging.BleLogEvent
 import com.atruedev.kmpble.logging.logEvent
 import com.atruedev.kmpble.peripheral.IosPeripheral
@@ -22,14 +22,20 @@ import kotlin.uuid.ExperimentalUuidApi
  * When iOS relaunches the app after termination:
  * 1. willRestoreState provides previously connected CBPeripherals
  * 2. This handler reconstructs IosPeripheral wrappers via PeripheralRegistry
- * 3. Restores persisted observation keys from NSUserDefaults
+ * 3. Restores persisted observations (keys + backpressure strategy) from NSUserDefaults
  * 4. Triggers reconnection and observation re-subscription
+ *
+ * Constructed as a class (not object) to allow dependency injection for testing.
+ * The default singleton is accessed via [StateRestorationHandler.default].
  */
 @OptIn(ExperimentalUuidApi::class)
-internal object StateRestorationHandler {
+internal class StateRestorationHandler(
+    private val persistence: ObservationPersistence = ObservationPersistence(),
+    private val centralManagerProvider: CentralManagerProvider = CentralManagerProvider,
+    private val peripheralRegistry: PeripheralRegistry = PeripheralRegistry,
+) {
 
     private var scope: CoroutineScope? = null
-    private val persistence = ObservationPersistence()
     private val started = AtomicInt(0)
 
     /**
@@ -39,18 +45,18 @@ internal object StateRestorationHandler {
      * Also prunes stale NSUserDefaults keys from peripherals that were
      * never explicitly closed in previous sessions.
      */
-    internal fun start() {
+    fun start() {
         if (!started.compareAndSet(0, 1)) return
         val newScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         scope = newScope
 
         safeLog("prune stale keys") {
-            val activeIds = PeripheralRegistry.identifiers()
+            val activeIds = peripheralRegistry.identifiers()
             persistence.pruneStaleEntries(activeIds)
         }
 
         newScope.launch {
-            CentralManagerProvider.scanDelegate.restoredPeripherals.collect { peripherals ->
+            centralManagerProvider.scanDelegate.restoredPeripherals.collect { peripherals ->
                 handleRestoredPeripherals(peripherals)
             }
         }
@@ -60,7 +66,7 @@ internal object StateRestorationHandler {
      * Cancel the restoration collector scope. Prevents zombie collectors
      * if the host app's BLE session ends and restarts.
      */
-    internal fun stop() {
+    fun stop() {
         scope?.cancel()
         scope = null
         started.store(0)
@@ -80,7 +86,7 @@ internal object StateRestorationHandler {
                 emptySet()
             }
 
-            val peripheral = PeripheralRegistry.getOrCreate(identifier) {
+            val peripheral = peripheralRegistry.getOrCreate(identifier) {
                 IosPeripheral(cbPeripheral)
             }
 
@@ -98,18 +104,18 @@ internal object StateRestorationHandler {
     }
 
     /**
-     * Persist current observation keys for a specific peripheral.
+     * Persist current observations for a specific peripheral.
      * Called by ObservationManager when observations change.
      */
-    internal fun persistObservations(peripheralId: String, keys: Set<ObservationKey>) {
-        if (!CentralManagerProvider.isStateRestorationEnabled) return
-        safeLog("persist observations") { persistence.save(peripheralId, keys) }
+    fun persistObservations(peripheralId: String, observations: Set<PersistedObservation>) {
+        if (!centralManagerProvider.isStateRestorationEnabled) return
+        safeLog("persist observations") { persistence.save(peripheralId, observations) }
     }
 
     /**
      * Clear persisted observations for a specific peripheral. Called on Peripheral.close().
      */
-    internal fun clearPersistedObservations(peripheralId: String) {
+    fun clearPersistedObservations(peripheralId: String) {
         safeLog("clear observations") { persistence.clear(peripheralId) }
     }
 
@@ -119,5 +125,10 @@ internal object StateRestorationHandler {
         } catch (e: Exception) {
             logEvent(BleLogEvent.Error(null, "StateRestoration: failed to $operation", e))
         }
+    }
+
+    companion object {
+        /** Default singleton instance for production use. */
+        val default = StateRestorationHandler()
     }
 }

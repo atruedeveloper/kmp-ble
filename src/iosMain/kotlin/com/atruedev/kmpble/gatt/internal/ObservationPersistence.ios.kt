@@ -1,22 +1,23 @@
 package com.atruedev.kmpble.gatt.internal
 
+import com.atruedev.kmpble.gatt.BackpressureStrategy
 import platform.Foundation.NSUserDefaults
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
 private const val DEFAULTS_KEY_PREFIX = "com.atruedev.kmpble.observation-keys"
+private const val INDEX_KEY = "com.atruedev.kmpble.observation-index"
 
 /**
  * iOS implementation of ObservationPersistence using NSUserDefaults.
  *
- * Stores observation keys as JSON. NSUserDefaults is backed by a plist file
- * that survives app termination and is available during background launch
- * (state restoration happens before user interaction).
+ * Stores observation entries (UUID pairs + backpressure strategy) as JSON.
+ * NSUserDefaults is backed by a plist file that survives app termination and
+ * is available during background launch (state restoration happens before
+ * user interaction).
  *
- * Observation keys contain only standard Bluetooth SIG UUIDs (e.g., 0x180D for
- * Heart Rate Service). While these don't contain PHI, they can reveal what
- * health data the app monitors. For apps requiring stronger protection, the
- * keys can be migrated to the Keychain in a future release.
+ * Peripheral IDs with persisted observations are tracked in a separate index key
+ * to avoid loading the entire NSUserDefaults dictionary during pruning.
  *
  * Design decision: NSUserDefaults was chosen over Keychain because:
  * 1. Keychain K/N interop requires complex CFTypeRef bridging that varies by Kotlin version
@@ -28,62 +29,124 @@ internal actual class ObservationPersistence actual constructor() {
 
     private fun keyFor(peripheralId: String) = "$DEFAULTS_KEY_PREFIX.$peripheralId"
 
-    actual fun save(peripheralId: String, keys: Set<ObservationKey>) {
-        if (keys.isEmpty()) {
+    actual fun save(peripheralId: String, observations: Set<PersistedObservation>) {
+        if (observations.isEmpty()) {
             clear(peripheralId)
             return
         }
 
-        val entries = keys.map { key ->
-            mapOf("s" to key.serviceUuid.toString(), "c" to key.charUuid.toString())
+        val entries = observations.map { obs ->
+            mapOf(
+                "s" to obs.key.serviceUuid.toString(),
+                "c" to obs.key.charUuid.toString(),
+                "bp" to serializeBackpressure(obs.backpressure),
+            )
         }
 
-        NSUserDefaults.standardUserDefaults.setObject(entries, forKey = keyFor(peripheralId))
+        val defaults = NSUserDefaults.standardUserDefaults
+        defaults.setObject(entries, forKey = keyFor(peripheralId))
+        addToIndex(peripheralId)
     }
 
-    actual fun restore(peripheralId: String): Set<ObservationKey> {
+    actual fun restore(peripheralId: String): Set<PersistedObservation> {
         val array = NSUserDefaults.standardUserDefaults.arrayForKey(keyFor(peripheralId))
             ?: return emptySet()
 
-        val keys = mutableSetOf<ObservationKey>()
+        val result = mutableSetOf<PersistedObservation>()
         for (item in array) {
             val dict = item as? Map<*, *> ?: continue
             val serviceStr = dict["s"] as? String ?: continue
             val charStr = dict["c"] as? String ?: continue
+            val bpStr = dict["bp"] as? String
             try {
-                keys.add(
-                    ObservationKey(
-                        serviceUuid = Uuid.parse(serviceStr),
-                        charUuid = Uuid.parse(charStr),
+                result.add(
+                    PersistedObservation(
+                        key = ObservationKey(
+                            serviceUuid = Uuid.parse(serviceStr),
+                            charUuid = Uuid.parse(charStr),
+                        ),
+                        backpressure = deserializeBackpressure(bpStr),
                     )
                 )
             } catch (_: Exception) {
                 // Skip malformed entries — lenient restore
             }
         }
-        return keys
+        return result
     }
 
     actual fun clear(peripheralId: String) {
         NSUserDefaults.standardUserDefaults.removeObjectForKey(keyFor(peripheralId))
+        removeFromIndex(peripheralId)
     }
 
     /**
      * Remove all persisted observation keys that don't belong to any of the given
      * peripheral IDs. Called during initialization to prevent unbounded key accumulation
      * from peripherals that were connected but never explicitly closed.
+     *
+     * Uses a separate index key rather than dictionaryRepresentation() to avoid
+     * loading the entire NSUserDefaults into memory.
      */
     fun pruneStaleEntries(activePeripheralIds: Set<String>) {
         val defaults = NSUserDefaults.standardUserDefaults
-        val allKeys = defaults.dictionaryRepresentation().keys
-            .filterIsInstance<String>()
-            .filter { it.startsWith(DEFAULTS_KEY_PREFIX) }
+        val indexed = getIndex()
+        val stale = indexed - activePeripheralIds
 
-        val activeKeys = activePeripheralIds.map { keyFor(it) }.toSet()
-        for (key in allKeys) {
-            if (key !in activeKeys) {
-                defaults.removeObjectForKey(key)
-            }
+        for (peripheralId in stale) {
+            defaults.removeObjectForKey(keyFor(peripheralId))
         }
+        if (stale.isNotEmpty()) {
+            setIndex(indexed - stale)
+        }
+    }
+
+    // --- Index management ---
+
+    private fun getIndex(): Set<String> {
+        val array = NSUserDefaults.standardUserDefaults.arrayForKey(INDEX_KEY)
+            ?: return emptySet()
+        return array.filterIsInstance<String>().toSet()
+    }
+
+    private fun setIndex(ids: Set<String>) {
+        if (ids.isEmpty()) {
+            NSUserDefaults.standardUserDefaults.removeObjectForKey(INDEX_KEY)
+        } else {
+            NSUserDefaults.standardUserDefaults.setObject(ids.toList(), forKey = INDEX_KEY)
+        }
+    }
+
+    private fun addToIndex(peripheralId: String) {
+        val current = getIndex()
+        if (peripheralId !in current) {
+            setIndex(current + peripheralId)
+        }
+    }
+
+    private fun removeFromIndex(peripheralId: String) {
+        val current = getIndex()
+        if (peripheralId in current) {
+            setIndex(current - peripheralId)
+        }
+    }
+
+    // --- BackpressureStrategy serialization ---
+
+    private fun serializeBackpressure(strategy: BackpressureStrategy): String = when (strategy) {
+        is BackpressureStrategy.Latest -> "latest"
+        is BackpressureStrategy.Buffer -> "buffer:${strategy.capacity}"
+        is BackpressureStrategy.Unbounded -> "unbounded"
+    }
+
+    private fun deserializeBackpressure(value: String?): BackpressureStrategy = when {
+        value == null -> BackpressureStrategy.Latest // fallback for pre-strategy data
+        value == "latest" -> BackpressureStrategy.Latest
+        value.startsWith("buffer:") -> {
+            val capacity = value.removePrefix("buffer:").toIntOrNull() ?: 64
+            BackpressureStrategy.Buffer(capacity)
+        }
+        value == "unbounded" -> BackpressureStrategy.Unbounded
+        else -> BackpressureStrategy.Latest
     }
 }

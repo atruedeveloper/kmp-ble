@@ -8,7 +8,7 @@ import kotlin.uuid.ExperimentalUuidApi
  */
 @OptIn(ExperimentalUuidApi::class)
 internal actual class ObservationPersistence actual constructor() {
-    actual fun save(peripheralId: String, keys: Set<ObservationKey>) { /* no-op on Android */ }
-    actual fun restore(peripheralId: String): Set<ObservationKey> = emptySet()
+    actual fun save(peripheralId: String, observations: Set<PersistedObservation>) { /* no-op on Android */ }
+    actual fun restore(peripheralId: String): Set<PersistedObservation> = emptySet()
     actual fun clear(peripheralId: String) { /* no-op on Android */ }
 }

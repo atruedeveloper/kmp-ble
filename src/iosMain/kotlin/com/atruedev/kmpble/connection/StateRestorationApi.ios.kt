@@ -29,5 +29,5 @@ public actual fun enableStateRestoration(config: StateRestorationConfig) {
     }
 
     CentralManagerProvider.restoreIdentifier = config.identifier
-    StateRestorationHandler.start()
+    StateRestorationHandler.default.start()
 }

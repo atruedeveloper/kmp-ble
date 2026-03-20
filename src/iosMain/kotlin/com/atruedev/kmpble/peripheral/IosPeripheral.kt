@@ -18,8 +18,8 @@ import com.atruedev.kmpble.gatt.WriteType
 import com.atruedev.kmpble.gatt.internal.GattResult
 import com.atruedev.kmpble.gatt.internal.LargeWriteHandler
 import com.atruedev.kmpble.gatt.internal.ObservationEvent
-import com.atruedev.kmpble.gatt.internal.ObservationKey
 import com.atruedev.kmpble.gatt.internal.ObservationManager
+import com.atruedev.kmpble.gatt.internal.PersistedObservation
 import com.atruedev.kmpble.gatt.internal.PendingOperations
 import com.atruedev.kmpble.gatt.internal.applyBackpressure
 import com.atruedev.kmpble.internal.CentralManagerProvider
@@ -106,8 +106,8 @@ public class IosPeripheral(
         }
         // Wire observation persistence for state restoration
         if (CentralManagerProvider.isStateRestorationEnabled) {
-            observationManager.onObservationsChanged = { keys ->
-                StateRestorationHandler.persistObservations(identifier.value, keys)
+            observationManager.onObservationsChanged = { observations ->
+                StateRestorationHandler.default.persistObservations(identifier.value, observations)
             }
         }
     }
@@ -196,7 +196,7 @@ public class IosPeripheral(
         bridge.close()
         observationManager.onObservationsChanged = null
         observationManager.clear()
-        StateRestorationHandler.clearPersistedObservations(identifier.value)
+        StateRestorationHandler.default.clearPersistedObservations(identifier.value)
         peripheralContext.close()
         PeripheralRegistry.remove(identifier)
     }
@@ -682,20 +682,19 @@ public class IosPeripheral(
      *     └── Restore persisted observation keys into ObservationManager
      * ```
      */
-    internal suspend fun restoreFromStateRestoration(savedObservations: Set<ObservationKey>) {
+    internal suspend fun restoreFromStateRestoration(savedObservations: Set<PersistedObservation>) {
         if (closed) return
 
         withContext(peripheralContext.dispatcher) {
-            // Pre-populate observation subscriptions from persisted keys.
+            // Pre-populate observation subscriptions from persisted entries.
             // This ensures that when the peripheral reconnects and services are discovered,
             // resubscribeObservations() will re-enable CCCD for these characteristics.
-            // Note: BackpressureStrategy.Latest is used because the original strategy is not
-            // persisted. Restored observations always use Latest — document this contract.
-            for (key in savedObservations) {
+            // The original backpressure strategy is restored from persistence.
+            for (obs in savedObservations) {
                 observationManager.subscribe(
-                    key.serviceUuid,
-                    key.charUuid,
-                    com.atruedev.kmpble.gatt.BackpressureStrategy.Latest,
+                    obs.key.serviceUuid,
+                    obs.key.charUuid,
+                    obs.backpressure,
                 )
             }
 

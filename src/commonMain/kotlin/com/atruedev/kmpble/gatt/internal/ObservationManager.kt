@@ -69,13 +69,13 @@ internal class ObservationManager(
 ) {
 
     /**
-     * Optional callback invoked when the set of active observation keys changes.
-     * Used by iOS state restoration to persist observation keys to NSUserDefaults.
-     * Set by IosPeripheral when state restoration is enabled.
+     * Optional callback invoked when the set of active observations changes.
+     * Used by iOS state restoration to persist observations (keys + backpressure)
+     * to NSUserDefaults. Set by IosPeripheral when state restoration is enabled.
      *
      * Invoked after the snapshot is updated, outside the serial context.
      */
-    internal var onObservationsChanged: ((Set<ObservationKey>) -> Unit)? = null
+    internal var onObservationsChanged: ((Set<PersistedObservation>) -> Unit)? = null
 
     /**
      * Serial dispatcher for mutable state access. Defaults to [Dispatchers.Unconfined]
@@ -99,11 +99,15 @@ internal class ObservationManager(
     }
 
     /**
-     * Fire the persistence callback.
+     * Fire the persistence callback with observation keys and their backpressure strategies.
      * Reads from the @Volatile snapshot (safe without serialization).
      */
     private fun notifyObservationsChanged() {
-        onObservationsChanged?.invoke(observationsSnapshot.keys.toSet())
+        onObservationsChanged?.invoke(
+            observationsSnapshot.values.map { tracked ->
+                PersistedObservation(tracked.key, tracked.backpressure)
+            }.toSet()
+        )
     }
 
     /**
