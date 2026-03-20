@@ -22,7 +22,7 @@ import kotlin.uuid.ExperimentalUuidApi
  * When iOS relaunches the app after termination:
  * 1. willRestoreState provides previously connected CBPeripherals
  * 2. This handler reconstructs IosPeripheral wrappers via PeripheralRegistry
- * 3. Restores persisted observation keys from the Keychain
+ * 3. Restores persisted observation keys from NSUserDefaults
  * 4. Triggers reconnection and observation re-subscription
  */
 @OptIn(ExperimentalUuidApi::class)
@@ -30,12 +30,15 @@ internal object StateRestorationHandler {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val persistence = ObservationPersistence()
+    private var started = false
 
     /**
      * Start listening for state restoration events.
      * Called once when state restoration is enabled.
      */
     internal fun start() {
+        if (started) return
+        started = true
         scope.launch {
             CentralManagerProvider.scanDelegate.restoredPeripherals.collect { peripherals ->
                 handleRestoredPeripherals(peripherals)
@@ -46,16 +49,16 @@ internal object StateRestorationHandler {
     private fun handleRestoredPeripherals(cbPeripherals: List<CBPeripheral>) {
         logEvent(BleLogEvent.ServerLifecycle("StateRestoration: restoring ${cbPeripherals.size} peripheral(s)"))
 
-        val savedObservations = try {
-            persistence.restore()
-        } catch (e: Exception) {
-            logEvent(BleLogEvent.Error(null, "StateRestoration: failed to restore observations, clearing", e))
-            persistence.clear()
-            emptySet()
-        }
-
         for (cbPeripheral in cbPeripherals) {
             val identifier = Identifier(cbPeripheral.identifier.UUIDString)
+
+            val savedObservations = try {
+                persistence.restore(identifier.value)
+            } catch (e: Exception) {
+                logEvent(BleLogEvent.Error(identifier, "StateRestoration: failed to restore observations, clearing", e))
+                try { persistence.clear(identifier.value) } catch (_: Exception) {}
+                emptySet()
+            }
 
             val peripheral = PeripheralRegistry.getOrCreate(identifier) {
                 IosPeripheral(cbPeripheral)
@@ -74,23 +77,24 @@ internal object StateRestorationHandler {
     }
 
     /**
-     * Persist current observation keys. Called by ObservationManager when observations change.
+     * Persist current observation keys for a specific peripheral.
+     * Called by ObservationManager when observations change.
      */
-    internal fun persistObservations(keys: Set<ObservationKey>) {
+    internal fun persistObservations(peripheralId: String, keys: Set<ObservationKey>) {
         if (!CentralManagerProvider.isStateRestorationEnabled) return
         try {
-            persistence.save(keys)
+            persistence.save(peripheralId, keys)
         } catch (e: Exception) {
             logEvent(BleLogEvent.Error(null, "StateRestoration: failed to persist observations", e))
         }
     }
 
     /**
-     * Clear persisted observations. Called on Peripheral.close().
+     * Clear persisted observations for a specific peripheral. Called on Peripheral.close().
      */
-    internal fun clearPersistedObservations() {
+    internal fun clearPersistedObservations(peripheralId: String) {
         try {
-            persistence.clear()
+            persistence.clear(peripheralId)
         } catch (e: Exception) {
             logEvent(BleLogEvent.Error(null, "StateRestoration: failed to clear observations", e))
         }

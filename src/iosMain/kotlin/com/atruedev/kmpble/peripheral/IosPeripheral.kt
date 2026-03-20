@@ -107,7 +107,7 @@ public class IosPeripheral(
         // Wire observation persistence for state restoration
         if (CentralManagerProvider.isStateRestorationEnabled) {
             observationManager.onObservationsChanged = { keys ->
-                StateRestorationHandler.persistObservations(keys)
+                StateRestorationHandler.persistObservations(identifier.value, keys)
             }
         }
     }
@@ -195,7 +195,7 @@ public class IosPeripheral(
         centralDelegate.unregisterConnectionCallback(identifier.value)
         bridge.close()
         observationManager.clear()
-        StateRestorationHandler.clearPersistedObservations()
+        StateRestorationHandler.clearPersistedObservations(identifier.value)
         peripheralContext.close()
         PeripheralRegistry.remove(identifier)
     }

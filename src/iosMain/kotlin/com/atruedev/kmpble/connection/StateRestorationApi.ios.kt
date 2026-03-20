@@ -12,7 +12,7 @@ import com.atruedev.kmpble.internal.StateRestorationHandler
  *
  * When enabled:
  * - CBCentralManager is created with [CBCentralManagerOptionRestoreIdentifierKey]
- * - Active observation subscriptions are persisted to the Keychain (encrypted)
+ * - Active observation subscriptions are persisted to NSUserDefaults
  * - On app relaunch by iOS, previously connected peripherals are restored
  * - Observations are automatically re-subscribed
  *

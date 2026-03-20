@@ -13,7 +13,7 @@ import kotlin.uuid.Uuid
 /**
  * Tests that ObservationManager fires the onObservationsChanged callback
  * when observations are added or removed. This callback is used by
- * iOS state restoration to persist observation keys to the Keychain.
+ * iOS state restoration to persist observation keys to NSUserDefaults.
  */
 @OptIn(ExperimentalUuidApi::class)
 class ObservationPersistenceCallbackTest {

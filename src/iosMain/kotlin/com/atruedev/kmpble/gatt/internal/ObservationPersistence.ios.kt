@@ -6,7 +6,7 @@ import platform.Foundation.NSUserDefaults
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
-private const val DEFAULTS_KEY = "com.atruedev.kmpble.observation-keys"
+private const val DEFAULTS_KEY_PREFIX = "com.atruedev.kmpble.observation-keys"
 
 /**
  * iOS implementation of ObservationPersistence using NSUserDefaults.
@@ -28,9 +28,11 @@ private const val DEFAULTS_KEY = "com.atruedev.kmpble.observation-keys"
 @OptIn(ExperimentalUuidApi::class)
 internal actual class ObservationPersistence actual constructor() {
 
-    actual fun save(keys: Set<ObservationKey>) {
+    private fun keyFor(peripheralId: String) = "$DEFAULTS_KEY_PREFIX.$peripheralId"
+
+    actual fun save(peripheralId: String, keys: Set<ObservationKey>) {
         if (keys.isEmpty()) {
-            clear()
+            clear(peripheralId)
             return
         }
 
@@ -39,13 +41,13 @@ internal actual class ObservationPersistence actual constructor() {
         }
 
         val defaults = NSUserDefaults.standardUserDefaults
-        defaults.setObject(entries, forKey = DEFAULTS_KEY)
+        defaults.setObject(entries, forKey = keyFor(peripheralId))
         defaults.synchronize()
     }
 
-    actual fun restore(): Set<ObservationKey> {
+    actual fun restore(peripheralId: String): Set<ObservationKey> {
         val defaults = NSUserDefaults.standardUserDefaults
-        val array = defaults.arrayForKey(DEFAULTS_KEY) ?: return emptySet()
+        val array = defaults.arrayForKey(keyFor(peripheralId)) ?: return emptySet()
 
         val keys = mutableSetOf<ObservationKey>()
         for (item in array) {
@@ -66,9 +68,31 @@ internal actual class ObservationPersistence actual constructor() {
         return keys
     }
 
-    actual fun clear() {
+    actual fun clear(peripheralId: String) {
         val defaults = NSUserDefaults.standardUserDefaults
-        defaults.removeObjectForKey(DEFAULTS_KEY)
+        defaults.removeObjectForKey(keyFor(peripheralId))
         defaults.synchronize()
+    }
+
+    /**
+     * Remove all persisted observation keys that don't belong to any of the given
+     * peripheral IDs. Called during initialization to prevent unbounded key accumulation
+     * from peripherals that were connected but never explicitly closed.
+     */
+    fun pruneStaleEntries(activePeripheralIds: Set<String>) {
+        val defaults = NSUserDefaults.standardUserDefaults
+        val allKeys = defaults.dictionaryRepresentation().keys
+            .filterIsInstance<String>()
+            .filter { it.startsWith(DEFAULTS_KEY_PREFIX) }
+
+        val activeKeys = activePeripheralIds.map { keyFor(it) }.toSet()
+        var pruned = 0
+        for (key in allKeys) {
+            if (key !in activeKeys) {
+                defaults.removeObjectForKey(key)
+                pruned++
+            }
+        }
+        if (pruned > 0) defaults.synchronize()
     }
 }
