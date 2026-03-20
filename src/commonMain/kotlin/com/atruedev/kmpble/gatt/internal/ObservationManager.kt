@@ -73,7 +73,9 @@ internal class ObservationManager(
      * Used by iOS state restoration to persist observations (keys + backpressure)
      * to NSUserDefaults. Set by IosPeripheral when state restoration is enabled.
      *
-     * Invoked after the snapshot is updated, outside the serial context.
+     * For subscribe/unsubscribe: invoked after the snapshot is updated, outside
+     * the serial dispatcher. For onPermanentDisconnect/completeObservation: invoked
+     * inline on the caller's context (the peripheral's serialized dispatcher).
      */
     internal var onObservationsChanged: ((Set<PersistedObservation>) -> Unit)? = null
 
