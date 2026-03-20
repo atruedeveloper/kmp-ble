@@ -18,11 +18,12 @@ import com.atruedev.kmpble.gatt.WriteType
 import com.atruedev.kmpble.gatt.internal.GattResult
 import com.atruedev.kmpble.gatt.internal.LargeWriteHandler
 import com.atruedev.kmpble.gatt.internal.ObservationEvent
-import com.atruedev.kmpble.gatt.internal.ObservationKey
 import com.atruedev.kmpble.gatt.internal.ObservationManager
+import com.atruedev.kmpble.gatt.internal.PersistedObservation
 import com.atruedev.kmpble.gatt.internal.PendingOperations
 import com.atruedev.kmpble.gatt.internal.applyBackpressure
 import com.atruedev.kmpble.internal.CentralManagerProvider
+import com.atruedev.kmpble.internal.StateRestorationHandler
 import com.atruedev.kmpble.l2cap.IosL2capChannel
 import com.atruedev.kmpble.l2cap.L2capChannel
 import com.atruedev.kmpble.l2cap.L2capException
@@ -102,6 +103,12 @@ public class IosPeripheral(
         bridge.onEvent = { event -> handleBridgeEvent(event) }
         centralDelegate.registerConnectionCallback(identifier.value) { connected, error ->
             handleConnectionCallback(connected, error)
+        }
+        // Wire observation persistence for state restoration
+        if (CentralManagerProvider.isStateRestorationEnabled) {
+            observationManager.onObservationsChanged = { observations ->
+                StateRestorationHandler.default.persistObservations(identifier.value, observations)
+            }
         }
     }
 
@@ -187,7 +194,9 @@ public class IosPeripheral(
         closeL2capChannels()
         centralDelegate.unregisterConnectionCallback(identifier.value)
         bridge.close()
+        observationManager.onObservationsChanged = null
         observationManager.clear()
+        StateRestorationHandler.default.clearPersistedObservations(identifier.value)
         peripheralContext.close()
         PeripheralRegistry.remove(identifier)
     }
@@ -652,6 +661,65 @@ public class IosPeripheral(
         closeL2capChannels()
         observationManager.onDisconnect()
         pendingOps.cancelAll(com.atruedev.kmpble.gatt.internal.NotConnectedException())
+    }
+
+    /**
+     * Restore this peripheral from iOS state restoration.
+     *
+     * Called by [StateRestorationHandler] when iOS provides restored CBPeripherals
+     * after app relaunch. Re-populates observation subscriptions from persisted keys
+     * and triggers service discovery + observation re-subscription if the peripheral
+     * is already connected.
+     *
+     * State restoration flow:
+     * ```
+     * iOS restores CBPeripheral (may already be connected)
+     *     │
+     *     ├── cbPeripheral.state == Connected?
+     *     │   ├── YES → discover services → resubscribe observations
+     *     │   └── NO  → wait for connection callback → normal flow resumes
+     *     │
+     *     └── Restore persisted observation keys into ObservationManager
+     * ```
+     */
+    internal suspend fun restoreFromStateRestoration(savedObservations: Set<PersistedObservation>) {
+        if (closed) return
+
+        withContext(peripheralContext.dispatcher) {
+            // Pre-populate observation subscriptions from persisted entries.
+            // This ensures that when the peripheral reconnects and services are discovered,
+            // resubscribeObservations() will re-enable CCCD for these characteristics.
+            // The original backpressure strategy is restored from persistence.
+            for (obs in savedObservations) {
+                observationManager.subscribe(
+                    obs.key.serviceUuid,
+                    obs.key.charUuid,
+                    obs.backpressure,
+                )
+            }
+
+            // If the peripheral is already connected (iOS maintained the connection),
+            // trigger service discovery to rebuild the native char/desc maps and
+            // re-enable notifications.
+            if (cbPeripheral.state == platform.CoreBluetooth.CBPeripheralStateConnected) {
+                peripheralContext.processEvent(ConnectionEvent.ConnectRequested)
+                peripheralContext.gattQueue.start()
+                peripheralContext.processEvent(ConnectionEvent.LinkEstablished)
+
+                connectionComplete = CompletableDeferred()
+                bridge.discoverServices()
+
+                try {
+                    withTimeout(DISCOVERY_TIMEOUT_MS) {
+                        connectionComplete!!.await()
+                    }
+                } finally {
+                    connectionComplete = null
+                }
+            }
+            // If not connected, the normal connection callback flow will handle it
+            // when iOS reconnects the peripheral.
+        }
     }
 
     private fun checkNotClosed() {

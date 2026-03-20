@@ -1,6 +1,9 @@
 package com.atruedev.kmpble.gatt.internal
 
 import com.atruedev.kmpble.gatt.BackpressureStrategy
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -8,9 +11,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.transformWhile
+import kotlinx.coroutines.withContext
 import kotlin.concurrent.Volatile
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -55,23 +57,59 @@ internal data class TrackedObservation(
  * Manages observation flows for BLE characteristic notifications/indications.
  * Supports reconnection resilience: observations persist across disconnects and
  * auto-resubscribe when the connection is restored.
+ *
+ * Serialization: Mutable state is accessed exclusively via [serialDispatcher]
+ * (`limitedParallelism(1)`), consistent with the rest of the codebase.
+ * The @Volatile [observationsSnapshot] provides lock-free reads from non-suspend
+ * contexts (platform callback threads).
  */
 @OptIn(ExperimentalUuidApi::class)
-internal class ObservationManager {
+internal class ObservationManager(
+    dispatcher: CoroutineDispatcher = Dispatchers.Unconfined,
+) {
 
-    private val mutex = Mutex()
+    /**
+     * Optional callback invoked when the set of active observations changes.
+     * Used by iOS state restoration to persist observations (keys + backpressure)
+     * to NSUserDefaults. Set by IosPeripheral when state restoration is enabled.
+     *
+     * For subscribe/unsubscribe: invoked after the snapshot is updated, outside
+     * the serial dispatcher. For onPermanentDisconnect/completeObservation: invoked
+     * inline on the caller's context (the peripheral's serialized dispatcher).
+     */
+    internal var onObservationsChanged: ((Set<PersistedObservation>) -> Unit)? = null
+
+    /**
+     * Serial dispatcher for mutable state access. Defaults to [Dispatchers.Unconfined]
+     * because ObservationManager is always owned by a Peripheral that already provides
+     * serialization via its own `limitedParallelism(1)` dispatcher. The Unconfined
+     * dispatcher runs inline — no thread hop, no test dispatcher conflict.
+     */
+    private val serialDispatcher: CoroutineDispatcher = dispatcher
     private val observations = mutableMapOf<ObservationKey, TrackedObservation>()
 
     /**
      * Snapshot of observations for lock-free reads from non-suspend contexts.
-     * Updated under [mutex] whenever [observations] changes. Reads are safe from
-     * any thread because the reference is @Volatile and the Map is immutable.
+     * Updated on [serialDispatcher] whenever [observations] changes. Reads are safe
+     * from any thread because the reference is @Volatile and the Map is immutable.
      */
     @Volatile
     private var observationsSnapshot = mapOf<ObservationKey, TrackedObservation>()
 
     private fun updateSnapshot() {
         observationsSnapshot = observations.toMap()
+    }
+
+    /**
+     * Fire the persistence callback with observation keys and their backpressure strategies.
+     * Reads from the @Volatile snapshot (safe without serialization).
+     */
+    private fun notifyObservationsChanged() {
+        onObservationsChanged?.invoke(
+            observationsSnapshot.values.map { tracked ->
+                PersistedObservation(tracked.key, tracked.backpressure)
+            }.toSet()
+        )
     }
 
     /**
@@ -89,7 +127,9 @@ internal class ObservationManager {
         backpressure: BackpressureStrategy,
     ): Flow<ObservationEvent> {
         val key = ObservationKey(serviceUuid, charUuid)
-        val tracked = mutex.withLock {
+        var keyAdded = false
+        val tracked = withContext(serialDispatcher) {
+            val sizeBefore = observations.size
             observations.getOrPut(key) {
                 TrackedObservation(
                     key = key,
@@ -98,11 +138,12 @@ internal class ObservationManager {
                 )
             }.also {
                 it.collectorCount++
-                updateSnapshot()
+                keyAdded = observations.size > sizeBefore
+                if (keyAdded) updateSnapshot()
             }
         }
+        if (keyAdded) notifyObservationsChanged()
 
-        // Use transformWhile to complete the flow when PermanentlyDisconnected is emitted
         return tracked.flow.transformWhile { event ->
             emit(event)
             event !is ObservationEvent.PermanentlyDisconnected
@@ -112,11 +153,14 @@ internal class ObservationManager {
     /**
      * Unsubscribe from a characteristic. Decrements the collector count.
      * Returns true if this was the last collector (caller should disable CCCD).
+     *
+     * Uses [NonCancellable] because this is called from flow onCompletion handlers
+     * where the coroutine may already be cancelled. Cleanup must complete regardless.
      */
     suspend fun unsubscribe(serviceUuid: Uuid, charUuid: Uuid): Boolean {
         val key = ObservationKey(serviceUuid, charUuid)
-        return mutex.withLock {
-            val tracked = observations[key] ?: return@withLock false
+        val result = withContext(NonCancellable + serialDispatcher) {
+            val tracked = observations[key] ?: return@withContext false
             tracked.collectorCount--
             if (tracked.collectorCount <= 0) {
                 observations.remove(key)
@@ -126,6 +170,8 @@ internal class ObservationManager {
                 false
             }
         }
+        if (result) notifyObservationsChanged()
+        return result
     }
 
     /**
@@ -133,8 +179,8 @@ internal class ObservationManager {
      * Called from GATT callback when notification/indication is received.
      */
     suspend fun emitValue(serviceUuid: Uuid, charUuid: Uuid, value: ByteArray) {
-        val key = ObservationKey(serviceUuid, charUuid)
-        mutex.withLock {
+        withContext(serialDispatcher) {
+            val key = ObservationKey(serviceUuid, charUuid)
             observations[key]?.flow?.tryEmit(ObservationEvent.Value(value))
         }
     }
@@ -142,7 +188,7 @@ internal class ObservationManager {
     /**
      * Emit a value to observation flow. Non-suspend version for use from GATT callbacks.
      *
-     * Thread-safety: Reads from an immutable @Volatile snapshot, so no locking is needed.
+     * Thread-safety: Reads from an immutable @Volatile snapshot, so no serialization needed.
      * tryEmit on MutableSharedFlow is thread-safe. Worst case during concurrent
      * subscribe/unsubscribe is a missed emit (acceptable for transient race windows).
      */
@@ -167,8 +213,8 @@ internal class ObservationManager {
      * Called when reconnection exhausts max attempts (permanent disconnect).
      * Emits [ObservationEvent.PermanentlyDisconnected] to all observations, then clears them.
      *
-     * Thread-safety: Reads snapshot, then clears both map and snapshot atomically
-     * (single-writer assumption — only called from the peripheral's serialized context).
+     * Thread-safety: Called from the peripheral's serialized context (single-writer).
+     * Reads snapshot, then clears both map and snapshot atomically.
      */
     fun onPermanentDisconnect() {
         val snapshot = observationsSnapshot
@@ -177,13 +223,14 @@ internal class ObservationManager {
         }
         observations.clear()
         observationsSnapshot = emptyMap()
+        notifyObservationsChanged()
     }
 
     /**
      * Returns list of observation keys that need CCCD re-enabled on reconnect.
      */
     suspend fun getObservationsToResubscribe(): List<ObservationKey> {
-        return mutex.withLock {
+        return withContext(serialDispatcher) {
             observations.keys.toList()
         }
     }
@@ -192,11 +239,12 @@ internal class ObservationManager {
      * Complete a specific observation (e.g., when characteristic no longer exists after reconnect).
      */
     suspend fun completeObservation(key: ObservationKey) {
-        mutex.withLock {
+        withContext(serialDispatcher) {
             observations[key]?.flow?.tryEmit(ObservationEvent.PermanentlyDisconnected)
             observations.remove(key)
             updateSnapshot()
         }
+        notifyObservationsChanged()
     }
 
     /**
@@ -204,7 +252,7 @@ internal class ObservationManager {
      */
     suspend fun hasCollectors(serviceUuid: Uuid, charUuid: Uuid): Boolean {
         val key = ObservationKey(serviceUuid, charUuid)
-        return mutex.withLock {
+        return withContext(serialDispatcher) {
             (observations[key]?.collectorCount ?: 0) > 0
         }
     }
@@ -213,7 +261,7 @@ internal class ObservationManager {
      * Terminal cleanup — clear all observations.
      * Called on Peripheral.close().
      *
-     * Thread-safety: Reads snapshot for iteration, then clears both map and snapshot.
+     * Thread-safety: Called from the peripheral's serialized context (single-writer).
      */
     fun clear() {
         val snapshot = observationsSnapshot

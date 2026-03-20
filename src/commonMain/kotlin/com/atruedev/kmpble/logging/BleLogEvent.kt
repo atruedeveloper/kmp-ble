@@ -15,6 +15,9 @@ public sealed interface BleLogEvent {
     public data class BondEvent(val identifier: Identifier, val event: String) : BleLogEvent
     public data class Error(val identifier: Identifier?, val message: String, val cause: Throwable?) : BleLogEvent
 
+    // State restoration events
+    public data class StateRestoration(val identifier: Identifier?, val event: String) : BleLogEvent
+
     // Server events
     public data class ServerLifecycle(val event: String) : BleLogEvent
     public data class ServerClientEvent(val device: Identifier, val event: String) : BleLogEvent
