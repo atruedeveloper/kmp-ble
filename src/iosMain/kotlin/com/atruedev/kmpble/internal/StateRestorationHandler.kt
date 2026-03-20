@@ -1,8 +1,6 @@
 package com.atruedev.kmpble.internal
 
 import com.atruedev.kmpble.Identifier
-import com.atruedev.kmpble.connection.ConnectionOptions
-import com.atruedev.kmpble.connection.ReconnectionStrategy
 import com.atruedev.kmpble.gatt.internal.ObservationKey
 import com.atruedev.kmpble.gatt.internal.ObservationPersistence
 import com.atruedev.kmpble.logging.BleLogEvent
@@ -14,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import platform.CoreBluetooth.CBPeripheral
+import kotlin.concurrent.Volatile
 import kotlin.uuid.ExperimentalUuidApi
 
 /**
@@ -30,15 +29,23 @@ internal object StateRestorationHandler {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val persistence = ObservationPersistence()
+
+    @Volatile
     private var started = false
 
     /**
      * Start listening for state restoration events.
      * Called once when state restoration is enabled.
+     *
+     * Also prunes stale NSUserDefaults keys from peripherals that were
+     * never explicitly closed in previous sessions.
      */
     internal fun start() {
         if (started) return
         started = true
+
+        pruneStaleKeys()
+
         scope.launch {
             CentralManagerProvider.scanDelegate.restoredPeripherals.collect { peripherals ->
                 handleRestoredPeripherals(peripherals)
@@ -47,7 +54,7 @@ internal object StateRestorationHandler {
     }
 
     private fun handleRestoredPeripherals(cbPeripherals: List<CBPeripheral>) {
-        logEvent(BleLogEvent.ServerLifecycle("StateRestoration: restoring ${cbPeripherals.size} peripheral(s)"))
+        logEvent(BleLogEvent.StateRestoration(null, "restoring ${cbPeripherals.size} peripheral(s)"))
 
         for (cbPeripheral in cbPeripherals) {
             val identifier = Identifier(cbPeripheral.identifier.UUIDString)
@@ -68,6 +75,7 @@ internal object StateRestorationHandler {
                 scope.launch {
                     try {
                         peripheral.restoreFromStateRestoration(savedObservations)
+                        logEvent(BleLogEvent.StateRestoration(identifier, "restored successfully"))
                     } catch (e: Exception) {
                         logEvent(BleLogEvent.Error(identifier, "StateRestoration: failed to restore", e))
                     }
@@ -97,6 +105,19 @@ internal object StateRestorationHandler {
             persistence.clear(peripheralId)
         } catch (e: Exception) {
             logEvent(BleLogEvent.Error(null, "StateRestoration: failed to clear observations", e))
+        }
+    }
+
+    /**
+     * Remove stale NSUserDefaults keys from peripherals no longer in the registry.
+     * Runs once on startup to prevent unbounded key accumulation.
+     */
+    private fun pruneStaleKeys() {
+        try {
+            val activeIds = PeripheralRegistry.identifiers()
+            persistence.pruneStaleEntries(activeIds)
+        } catch (e: Exception) {
+            logEvent(BleLogEvent.Error(null, "StateRestoration: failed to prune stale keys", e))
         }
     }
 }

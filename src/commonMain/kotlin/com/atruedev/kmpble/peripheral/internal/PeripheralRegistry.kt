@@ -34,6 +34,9 @@ internal object PeripheralRegistry {
         registry = registry - identifier
     }
 
+    /** Returns the set of peripheral ID strings currently in the registry. */
+    internal fun identifiers(): Set<String> = registry.keys.map { it.value }.toSet()
+
     internal fun clear() {
         registry = emptyMap()
     }
