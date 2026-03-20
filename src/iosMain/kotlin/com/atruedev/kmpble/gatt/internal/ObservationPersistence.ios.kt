@@ -1,7 +1,5 @@
 package com.atruedev.kmpble.gatt.internal
 
-import platform.Foundation.NSData
-import platform.Foundation.NSJSONSerialization
 import platform.Foundation.NSUserDefaults
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -40,14 +38,12 @@ internal actual class ObservationPersistence actual constructor() {
             mapOf("s" to key.serviceUuid.toString(), "c" to key.charUuid.toString())
         }
 
-        val defaults = NSUserDefaults.standardUserDefaults
-        defaults.setObject(entries, forKey = keyFor(peripheralId))
-        defaults.synchronize()
+        NSUserDefaults.standardUserDefaults.setObject(entries, forKey = keyFor(peripheralId))
     }
 
     actual fun restore(peripheralId: String): Set<ObservationKey> {
-        val defaults = NSUserDefaults.standardUserDefaults
-        val array = defaults.arrayForKey(keyFor(peripheralId)) ?: return emptySet()
+        val array = NSUserDefaults.standardUserDefaults.arrayForKey(keyFor(peripheralId))
+            ?: return emptySet()
 
         val keys = mutableSetOf<ObservationKey>()
         for (item in array) {
@@ -69,9 +65,7 @@ internal actual class ObservationPersistence actual constructor() {
     }
 
     actual fun clear(peripheralId: String) {
-        val defaults = NSUserDefaults.standardUserDefaults
-        defaults.removeObjectForKey(keyFor(peripheralId))
-        defaults.synchronize()
+        NSUserDefaults.standardUserDefaults.removeObjectForKey(keyFor(peripheralId))
     }
 
     /**
@@ -86,13 +80,10 @@ internal actual class ObservationPersistence actual constructor() {
             .filter { it.startsWith(DEFAULTS_KEY_PREFIX) }
 
         val activeKeys = activePeripheralIds.map { keyFor(it) }.toSet()
-        var pruned = 0
         for (key in allKeys) {
             if (key !in activeKeys) {
                 defaults.removeObjectForKey(key)
-                pruned++
             }
         }
-        if (pruned > 0) defaults.synchronize()
     }
 }

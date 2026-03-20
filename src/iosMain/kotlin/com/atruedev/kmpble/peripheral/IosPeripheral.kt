@@ -194,6 +194,7 @@ public class IosPeripheral(
         closeL2capChannels()
         centralDelegate.unregisterConnectionCallback(identifier.value)
         bridge.close()
+        observationManager.onObservationsChanged = null
         observationManager.clear()
         StateRestorationHandler.clearPersistedObservations(identifier.value)
         peripheralContext.close()
@@ -684,22 +685,24 @@ public class IosPeripheral(
     internal suspend fun restoreFromStateRestoration(savedObservations: Set<ObservationKey>) {
         if (closed) return
 
-        // Pre-populate observation subscriptions from persisted keys.
-        // This ensures that when the peripheral reconnects and services are discovered,
-        // resubscribeObservations() will re-enable CCCD for these characteristics.
-        for (key in savedObservations) {
-            observationManager.subscribe(
-                key.serviceUuid,
-                key.charUuid,
-                com.atruedev.kmpble.gatt.BackpressureStrategy.Latest,
-            )
-        }
+        withContext(peripheralContext.dispatcher) {
+            // Pre-populate observation subscriptions from persisted keys.
+            // This ensures that when the peripheral reconnects and services are discovered,
+            // resubscribeObservations() will re-enable CCCD for these characteristics.
+            // Note: BackpressureStrategy.Latest is used because the original strategy is not
+            // persisted. Restored observations always use Latest — document this contract.
+            for (key in savedObservations) {
+                observationManager.subscribe(
+                    key.serviceUuid,
+                    key.charUuid,
+                    com.atruedev.kmpble.gatt.BackpressureStrategy.Latest,
+                )
+            }
 
-        // If the peripheral is already connected (iOS maintained the connection),
-        // trigger service discovery to rebuild the native char/desc maps and
-        // re-enable notifications.
-        if (cbPeripheral.state == platform.CoreBluetooth.CBPeripheralStateConnected) {
-            withContext(peripheralContext.dispatcher) {
+            // If the peripheral is already connected (iOS maintained the connection),
+            // trigger service discovery to rebuild the native char/desc maps and
+            // re-enable notifications.
+            if (cbPeripheral.state == platform.CoreBluetooth.CBPeripheralStateConnected) {
                 peripheralContext.processEvent(ConnectionEvent.ConnectRequested)
                 peripheralContext.gattQueue.start()
                 peripheralContext.processEvent(ConnectionEvent.LinkEstablished)
@@ -715,9 +718,9 @@ public class IosPeripheral(
                     connectionComplete = null
                 }
             }
+            // If not connected, the normal connection callback flow will handle it
+            // when iOS reconnects the peripheral.
         }
-        // If not connected, the normal connection callback flow will handle it
-        // when iOS reconnects the peripheral.
     }
 
     private fun checkNotClosed() {

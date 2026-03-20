@@ -121,7 +121,9 @@ internal class ObservationManager(
         backpressure: BackpressureStrategy,
     ): Flow<ObservationEvent> {
         val key = ObservationKey(serviceUuid, charUuid)
+        var keyAdded = false
         val tracked = withContext(serialDispatcher) {
+            val sizeBefore = observations.size
             observations.getOrPut(key) {
                 TrackedObservation(
                     key = key,
@@ -130,10 +132,11 @@ internal class ObservationManager(
                 )
             }.also {
                 it.collectorCount++
-                updateSnapshot()
+                keyAdded = observations.size > sizeBefore
+                if (keyAdded) updateSnapshot()
             }
         }
-        notifyObservationsChanged()
+        if (keyAdded) notifyObservationsChanged()
 
         return tracked.flow.transformWhile { event ->
             emit(event)
@@ -141,10 +144,6 @@ internal class ObservationManager(
         }
     }
 
-    /**
-     * Unsubscribe from a characteristic. Decrements the collector count.
-     * Returns true if this was the last collector (caller should disable CCCD).
-     */
     /**
      * Unsubscribe from a characteristic. Decrements the collector count.
      * Returns true if this was the last collector (caller should disable CCCD).

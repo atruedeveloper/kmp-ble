@@ -10,9 +10,10 @@ import com.atruedev.kmpble.peripheral.internal.PeripheralRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import platform.CoreBluetooth.CBPeripheral
-import kotlin.concurrent.Volatile
+import kotlin.concurrent.AtomicInt
 import kotlin.uuid.ExperimentalUuidApi
 
 /**
@@ -27,11 +28,9 @@ import kotlin.uuid.ExperimentalUuidApi
 @OptIn(ExperimentalUuidApi::class)
 internal object StateRestorationHandler {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var scope: CoroutineScope? = null
     private val persistence = ObservationPersistence()
-
-    @Volatile
-    private var started = false
+    private val started = AtomicInt(0)
 
     /**
      * Start listening for state restoration events.
@@ -41,16 +40,30 @@ internal object StateRestorationHandler {
      * never explicitly closed in previous sessions.
      */
     internal fun start() {
-        if (started) return
-        started = true
+        if (!started.compareAndSet(0, 1)) return
+        val newScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        scope = newScope
 
-        pruneStaleKeys()
+        safeLog("prune stale keys") {
+            val activeIds = PeripheralRegistry.identifiers()
+            persistence.pruneStaleEntries(activeIds)
+        }
 
-        scope.launch {
+        newScope.launch {
             CentralManagerProvider.scanDelegate.restoredPeripherals.collect { peripherals ->
                 handleRestoredPeripherals(peripherals)
             }
         }
+    }
+
+    /**
+     * Cancel the restoration collector scope. Prevents zombie collectors
+     * if the host app's BLE session ends and restarts.
+     */
+    internal fun stop() {
+        scope?.cancel()
+        scope = null
+        started.store(0)
     }
 
     private fun handleRestoredPeripherals(cbPeripherals: List<CBPeripheral>) {
@@ -72,7 +85,7 @@ internal object StateRestorationHandler {
             }
 
             if (peripheral is IosPeripheral) {
-                scope.launch {
+                scope?.launch {
                     try {
                         peripheral.restoreFromStateRestoration(savedObservations)
                         logEvent(BleLogEvent.StateRestoration(identifier, "restored successfully"))
@@ -90,34 +103,21 @@ internal object StateRestorationHandler {
      */
     internal fun persistObservations(peripheralId: String, keys: Set<ObservationKey>) {
         if (!CentralManagerProvider.isStateRestorationEnabled) return
-        try {
-            persistence.save(peripheralId, keys)
-        } catch (e: Exception) {
-            logEvent(BleLogEvent.Error(null, "StateRestoration: failed to persist observations", e))
-        }
+        safeLog("persist observations") { persistence.save(peripheralId, keys) }
     }
 
     /**
      * Clear persisted observations for a specific peripheral. Called on Peripheral.close().
      */
     internal fun clearPersistedObservations(peripheralId: String) {
-        try {
-            persistence.clear(peripheralId)
-        } catch (e: Exception) {
-            logEvent(BleLogEvent.Error(null, "StateRestoration: failed to clear observations", e))
-        }
+        safeLog("clear observations") { persistence.clear(peripheralId) }
     }
 
-    /**
-     * Remove stale NSUserDefaults keys from peripherals no longer in the registry.
-     * Runs once on startup to prevent unbounded key accumulation.
-     */
-    private fun pruneStaleKeys() {
+    private inline fun safeLog(operation: String, block: () -> Unit) {
         try {
-            val activeIds = PeripheralRegistry.identifiers()
-            persistence.pruneStaleEntries(activeIds)
+            block()
         } catch (e: Exception) {
-            logEvent(BleLogEvent.Error(null, "StateRestoration: failed to prune stale keys", e))
+            logEvent(BleLogEvent.Error(null, "StateRestoration: failed to $operation", e))
         }
     }
 }
