@@ -2,6 +2,8 @@ package com.atruedev.kmpble.peripheral
 
 import com.atruedev.kmpble.connection.ConnectionOptions
 import com.atruedev.kmpble.gatt.Characteristic
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlin.uuid.ExperimentalUuidApi
 
 /**
@@ -9,6 +11,10 @@ import kotlin.uuid.ExperimentalUuidApi
  *
  * Useful for debugging — answers "what does this device expose?" in one call.
  * Only meaningful after service discovery completes (i.e., in [State.Connected.Ready]).
+ *
+ * Note: reads [state] and [services] as separate snapshots — under concurrent state
+ * changes, the output may be momentarily inconsistent (e.g., state shows Ready but
+ * services is null if a disconnect raced in between).
  *
  * ```
  * peripheral.connect()
@@ -90,7 +96,8 @@ private fun buildProperties(p: Characteristic.Properties): String {
  *   or connecting, [connect]'s own invariants apply
  * - If connection drops mid-block: the block's coroutine is cancelled with
  *   [kotlinx.coroutines.CancellationException], then close() runs in finally
- * - [close] always runs in a finally block, regardless of success or failure
+ * - [close] always runs in a [NonCancellable] context, guaranteeing cleanup
+ *   even if the coroutine is cancelled mid-block
  *
  * Not thread-safe — callers must ensure exclusive access to this peripheral.
  */
@@ -103,6 +110,6 @@ public suspend fun Peripheral.whenReady(
         connect(options)
         block()
     } finally {
-        close()
+        withContext(NonCancellable) { close() }
     }
 }

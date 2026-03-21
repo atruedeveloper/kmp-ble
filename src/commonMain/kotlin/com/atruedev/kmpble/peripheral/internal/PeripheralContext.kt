@@ -106,6 +106,10 @@ internal class PeripheralContext(val identifier: Identifier) {
     /**
      * Terminal — release all resources. Non-suspend so Peripheral.close() can be synchronous
      * (required for ViewModel.onCleared(), deinit, use {} blocks).
+     *
+     * Note: @Volatile guarantees visibility but not atomicity of the check-then-set.
+     * Concurrent close() calls could both proceed — this is safe because
+     * [GattOperationQueue.close] and [CoroutineScope.cancel] are both idempotent.
      */
     fun close() {
         if (closed) return
