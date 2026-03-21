@@ -19,10 +19,12 @@ class L2capController(
     private val _log = MutableStateFlow(emptyList<String>())
     val log: StateFlow<List<String>> = _log.asStateFlow()
 
+    private var openJob: Job? = null
     private var incomingJob: Job? = null
 
     fun open(psm: Int, secure: Boolean = true) {
-        scope.launch {
+        openJob?.cancel()
+        openJob = scope.launch {
             try {
                 val ch = peripheral.openL2capChannel(psm, secure)
                 _channel.value = ch
@@ -51,6 +53,7 @@ class L2capController(
     }
 
     fun close() {
+        openJob?.cancel()
         incomingJob?.cancel()
         _channel.value?.close()
         _channel.value = null

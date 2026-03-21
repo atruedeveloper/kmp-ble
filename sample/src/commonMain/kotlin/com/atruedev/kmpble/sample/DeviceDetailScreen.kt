@@ -50,12 +50,11 @@ import com.atruedev.kmpble.connection.ConnectionOptions
 import com.atruedev.kmpble.connection.ConnectionRecipe
 import com.atruedev.kmpble.connection.ReconnectionStrategy
 import com.atruedev.kmpble.connection.State
+import com.atruedev.kmpble.ServiceUuid
 import com.atruedev.kmpble.scanner.Advertisement
-import com.atruedev.kmpble.scanner.uuidFrom
+import kotlin.uuid.ExperimentalUuidApi
 
-private val HR_SERVICE = uuidFrom("180D")
-
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalBleApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalBleApi::class, ExperimentalUuidApi::class)
 @Composable
 fun DeviceDetailScreen(
     advertisement: Advertisement,
@@ -76,7 +75,7 @@ fun DeviceDetailScreen(
 
     val snackbar = remember { SnackbarHostState() }
     val isConnected = state is State.Connected
-    val hasHeartRate = services?.any { it.uuid == HR_SERVICE } == true
+    val hasHeartRate = services?.any { it.uuid == ServiceUuid.HEART_RATE } == true
 
     LaunchedEffect(error) {
         error?.let {

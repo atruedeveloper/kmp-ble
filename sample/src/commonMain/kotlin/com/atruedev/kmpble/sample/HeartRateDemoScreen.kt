@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -30,15 +28,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.atruedev.kmpble.ServiceUuid
 import com.atruedev.kmpble.connection.State
 import com.atruedev.kmpble.gatt.BackpressureStrategy
 import com.atruedev.kmpble.scanner.Advertisement
 import com.atruedev.kmpble.scanner.uuidFrom
+import kotlin.uuid.ExperimentalUuidApi
 
-private val HR_SERVICE = uuidFrom("180D")
+@OptIn(ExperimentalUuidApi::class)
 private val HR_MEASUREMENT = uuidFrom("2A37")
 
-@OptIn(ExperimentalMaterial3Api::class)
+private fun parseHeartRate(data: ByteArray): Int? {
+    if (data.isEmpty()) return null
+    val flags = data[0].toInt() and 0xFF
+    return if (flags and 0x01 == 0) {
+        if (data.size > 1) data[1].toInt() and 0xFF else null
+    } else {
+        if (data.size > 2) ((data[2].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF) else null
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalUuidApi::class)
 @Composable
 fun HeartRateDemoScreen(
     advertisement: Advertisement,
@@ -52,7 +62,7 @@ fun HeartRateDemoScreen(
     var recentValues by remember { mutableStateOf(emptyList<String>()) }
 
     val hrChar = remember(services) {
-        services?.firstOrNull { it.uuid == HR_SERVICE }
+        services?.firstOrNull { it.uuid == ServiceUuid.HEART_RATE }
             ?.characteristics
             ?.firstOrNull { it.uuid == HR_MEASUREMENT }
     }
@@ -60,17 +70,9 @@ fun HeartRateDemoScreen(
     if (hrChar != null) {
         LaunchedEffect(hrChar) {
             vm.observeValues(hrChar, BackpressureStrategy.Latest).collect { data ->
-                if (data.isNotEmpty()) {
-                    val flags = data[0].toInt() and 0xFF
-                    val hrValue = if (flags and 0x01 == 0) {
-                        if (data.size > 1) data[1].toInt() and 0xFF else null
-                    } else {
-                        if (data.size > 2) ((data[2].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF) else null
-                    }
-                    hrValue?.let {
-                        bpm = it
-                        recentValues = (listOf("$it bpm") + recentValues).take(20)
-                    }
+                parseHeartRate(data)?.let {
+                    bpm = it
+                    recentValues = (listOf("$it bpm") + recentValues).take(20)
                 }
             }
         }
@@ -125,11 +127,8 @@ fun HeartRateDemoScreen(
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Recent Values", style = MaterialTheme.typography.titleSmall)
                         Spacer(Modifier.height(8.dp))
-                        LazyColumn(
-                            modifier = Modifier.height(200.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
-                        ) {
-                            items(recentValues) { value ->
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            for (value in recentValues) {
                                 Text(value, style = MaterialTheme.typography.bodySmall)
                             }
                         }

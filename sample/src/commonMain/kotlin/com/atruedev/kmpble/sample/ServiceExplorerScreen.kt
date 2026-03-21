@@ -43,7 +43,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.atruedev.kmpble.ExperimentalBleApi
-import com.atruedev.kmpble.connection.ConnectionOptions
 import com.atruedev.kmpble.connection.State
 import com.atruedev.kmpble.gatt.Characteristic
 import com.atruedev.kmpble.gatt.DiscoveredService
@@ -105,40 +104,43 @@ fun ServiceExplorerScreen(
 }
 
 @Composable
-private fun GattDumpSection(vm: BleViewModel) {
+private fun CollapsibleCard(
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
-    var dumpText by remember { mutableStateOf<String?>(null) }
-
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(modifier = modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("GATT Dump", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    if (expanded) "▲" else "▼",
-                    style = MaterialTheme.typography.titleSmall,
-                )
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(if (expanded) "▲" else "▼", style = MaterialTheme.typography.titleSmall)
             }
+            AnimatedVisibility(expanded) { content() }
+        }
+    }
+}
 
-            AnimatedVisibility(expanded) {
-                Column {
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(onClick = { dumpText = vm.dump() }) {
-                        Text("Refresh")
-                    }
-                    dumpText?.let {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = it,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        )
-                    }
-                }
+@Composable
+private fun GattDumpSection(vm: BleViewModel) {
+    var dumpText by remember { mutableStateOf<String?>(null) }
+
+    CollapsibleCard("GATT Dump") {
+        Column {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { dumpText = vm.dump() }) { Text("Refresh") }
+            dumpText?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                )
             }
         }
     }
@@ -277,56 +279,41 @@ private fun BenchmarkSection(
     benchmarkResult: String?,
     vm: BleViewModel,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    CollapsibleCard("Benchmarks") {
+        Column {
+            Spacer(Modifier.height(8.dp))
 
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Benchmarks", style = MaterialTheme.typography.titleSmall)
-                Text(if (expanded) "▲" else "▼", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Measure connection time and GATT read throughput/latency.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            val readableChar = remember(services) {
+                services?.flatMap { it.characteristics }?.firstOrNull { it.properties.read }
             }
 
-            AnimatedVisibility(expanded) {
-                Column {
-                    Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { vm.benchmarkConnect() },
+                    enabled = state is State.Connected || state is State.Disconnected,
+                ) { Text("Bench Connect") }
 
-                    Text(
-                        "Measure connection time and GATT read throughput/latency.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                OutlinedButton(
+                    onClick = { readableChar?.let { vm.benchmarkReads(it) } },
+                    enabled = state is State.Connected && readableChar != null,
+                ) { Text("Bench Reads") }
+            }
 
-                    Spacer(Modifier.height(8.dp))
-
-                    val readableChar = remember(services) {
-                        services?.flatMap { it.characteristics }?.firstOrNull { it.properties.read }
-                    }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { vm.benchmarkConnect() },
-                            enabled = state is State.Connected || state is State.Disconnected,
-                        ) { Text("Bench Connect") }
-
-                        OutlinedButton(
-                            onClick = { readableChar?.let { vm.benchmarkReads(it) } },
-                            enabled = state is State.Connected && readableChar != null,
-                        ) { Text("Bench Reads") }
-                    }
-
-                    benchmarkResult?.let {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = it,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+            benchmarkResult?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -339,91 +326,81 @@ private fun L2capSection(
     log: List<String>,
     vm: BleViewModel,
 ) {
-    var expanded by remember { mutableStateOf(false) }
     var psmInput by remember { mutableStateOf("") }
     var sendInput by remember { mutableStateOf("") }
+    var sendError by remember { mutableStateOf(false) }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
+    CollapsibleCard("L2CAP Channel") {
+        Column {
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                "High-throughput streaming bypassing GATT. Requires a device with an open PSM endpoint.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            FilterChip(
+                selected = isOpen,
+                onClick = {},
+                label = { Text(if (isOpen) "Open" else "Closed") },
+            )
+
+            Spacer(Modifier.height(8.dp))
+
             Row(
-                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("L2CAP Channel", style = MaterialTheme.typography.titleSmall)
-                Text(if (expanded) "▲" else "▼", style = MaterialTheme.typography.titleSmall)
+                OutlinedTextField(
+                    value = psmInput,
+                    onValueChange = { psmInput = it },
+                    label = { Text("PSM") },
+                    modifier = Modifier.width(80.dp),
+                    singleLine = true,
+                )
+                Button(
+                    onClick = { psmInput.toIntOrNull()?.let { vm.l2cap.open(it) } },
+                    enabled = state is State.Connected && !isOpen,
+                ) { Text("Open") }
+                OutlinedButton(
+                    onClick = { vm.l2cap.close() },
+                    enabled = isOpen,
+                ) { Text("Close") }
             }
 
-            AnimatedVisibility(expanded) {
-                Column {
-                    Spacer(Modifier.height(8.dp))
-
-                    Text(
-                        "High-throughput streaming bypassing GATT. Requires a device with an open PSM endpoint.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+            if (isOpen) {
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = sendInput,
+                        onValueChange = { sendInput = it; sendError = false },
+                        label = { Text("Hex") },
+                        modifier = Modifier.width(120.dp),
+                        singleLine = true,
+                        isError = sendError,
                     )
+                    OutlinedButton(
+                        onClick = {
+                            try {
+                                vm.l2cap.write(sendInput.hexToByteArray())
+                            } catch (_: IllegalArgumentException) {
+                                sendError = true
+                            }
+                        },
+                    ) { Text("Send") }
+                }
+            }
 
-                    Spacer(Modifier.height(8.dp))
-
-                    FilterChip(
-                        selected = isOpen,
-                        onClick = {},
-                        label = { Text(if (isOpen) "Open" else "Closed") },
-                    )
-
-                    Spacer(Modifier.height(8.dp))
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        OutlinedTextField(
-                            value = psmInput,
-                            onValueChange = { psmInput = it },
-                            label = { Text("PSM") },
-                            modifier = Modifier.width(80.dp),
-                            singleLine = true,
-                        )
-                        Button(
-                            onClick = { psmInput.toIntOrNull()?.let { vm.l2cap.open(it) } },
-                            enabled = state is State.Connected && !isOpen,
-                        ) { Text("Open") }
-                        OutlinedButton(
-                            onClick = { vm.l2cap.close() },
-                            enabled = isOpen,
-                        ) { Text("Close") }
-                    }
-
-                    if (isOpen) {
-                        Spacer(Modifier.height(8.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            OutlinedTextField(
-                                value = sendInput,
-                                onValueChange = { sendInput = it },
-                                label = { Text("Hex") },
-                                modifier = Modifier.width(120.dp),
-                                singleLine = true,
-                            )
-                            OutlinedButton(
-                                onClick = {
-                                    try {
-                                        vm.l2cap.write(sendInput.hexToByteArray())
-                                    } catch (_: IllegalArgumentException) { }
-                                },
-                            ) { Text("Send") }
-                        }
-                    }
-
-                    if (log.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        for (entry in log.take(10)) {
-                            Text(entry, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
+            if (log.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                for (entry in log.take(10)) {
+                    Text(entry, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
