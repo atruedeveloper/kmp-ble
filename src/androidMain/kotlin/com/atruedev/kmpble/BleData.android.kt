@@ -1,9 +1,5 @@
 package com.atruedev.kmpble
 
-/**
- * Android [BleData]: immutable wrapper around ByteArray.
- * Defensive copy on public construction. Slicing shares the internal array.
- */
 public actual class BleData internal constructor(
     internal val bytes: ByteArray,
     private val offset: Int = 0,
