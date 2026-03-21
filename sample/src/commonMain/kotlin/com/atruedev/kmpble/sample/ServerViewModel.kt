@@ -37,7 +37,7 @@ class ServerViewModel : ViewModel() {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    val server: GattServer = GattServer {
+    private val server: GattServer = GattServer {
         service(HEART_RATE_SERVICE) {
             characteristic(HEART_RATE_MEASUREMENT) {
                 properties { read = true; notify = true }

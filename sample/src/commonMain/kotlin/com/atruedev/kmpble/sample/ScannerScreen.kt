@@ -77,6 +77,8 @@ fun ScannerScreen(
     onServerTapped: () -> Unit = {},
 ) {
     var devices by remember { mutableStateOf(emptyList<ScannedDevice>()) }
+    // Safe without synchronization: both writer (snapshot coroutine) and reader (click handler)
+    // run on Main dispatcher via rememberCoroutineScope / Compose click callback.
     val advertisementLookup = remember { HashMap<String, Advertisement>() }
     val scope = rememberCoroutineScope()
 

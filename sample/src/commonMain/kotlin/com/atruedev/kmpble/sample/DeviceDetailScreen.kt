@@ -127,12 +127,21 @@ fun DeviceDetailScreen(
 }
 
 @OptIn(ExperimentalBleApi::class)
-private enum class RecipeOption(val label: String, val options: ConnectionOptions? = null) {
-    Custom("Custom"),
-    Medical("Medical", ConnectionRecipe.MEDICAL),
-    Fitness("Fitness", ConnectionRecipe.FITNESS),
-    IoT("IoT", ConnectionRecipe.IOT),
-    Consumer("Consumer", ConnectionRecipe.CONSUMER),
+private sealed interface RecipeOption {
+    val label: String
+
+    data object Custom : RecipeOption { override val label = "Custom" }
+    data class Preset(override val label: String, val options: ConnectionOptions) : RecipeOption
+
+    companion object {
+        val entries = listOf(
+            Custom,
+            Preset("Medical", ConnectionRecipe.MEDICAL),
+            Preset("Fitness", ConnectionRecipe.FITNESS),
+            Preset("IoT", ConnectionRecipe.IOT),
+            Preset("Consumer", ConnectionRecipe.CONSUMER),
+        )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalBleApi::class)
@@ -141,7 +150,7 @@ private fun ConnectionSection(state: State, bond: BondState, vm: BleViewModel) {
     var autoConnect by remember { mutableStateOf(false) }
     var useReconnection by remember { mutableStateOf(false) }
     var bondingPref by remember { mutableStateOf(BondingPreference.IfRequired) }
-    var selectedRecipe by remember { mutableStateOf(RecipeOption.Custom) }
+    var selectedRecipe by remember { mutableStateOf<RecipeOption>(RecipeOption.Custom) }
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -167,7 +176,7 @@ private fun ConnectionSection(state: State, bond: BondState, vm: BleViewModel) {
                 }
             }
 
-            if (selectedRecipe == RecipeOption.Custom) {
+            if (selectedRecipe is RecipeOption.Custom) {
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("autoConnect", style = MaterialTheme.typography.bodySmall)
@@ -198,15 +207,18 @@ private fun ConnectionSection(state: State, bond: BondState, vm: BleViewModel) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = {
-                        val baseOptions = selectedRecipe.options ?: ConnectionOptions(
-                            autoConnect = autoConnect,
-                            bondingPreference = bondingPref,
-                            reconnectionStrategy = if (useReconnection) {
-                                ReconnectionStrategy.ExponentialBackoff()
-                            } else {
-                                ReconnectionStrategy.None
-                            },
-                        )
+                        val baseOptions = when (val recipe = selectedRecipe) {
+                            is RecipeOption.Custom -> ConnectionOptions(
+                                autoConnect = autoConnect,
+                                bondingPreference = bondingPref,
+                                reconnectionStrategy = if (useReconnection) {
+                                    ReconnectionStrategy.ExponentialBackoff()
+                                } else {
+                                    ReconnectionStrategy.None
+                                },
+                            )
+                            is RecipeOption.Preset -> recipe.options
+                        }
                         vm.connect(baseOptions.copy(pairingHandler = vm.pairing.handler))
                     },
                     enabled = state is State.Disconnected,
@@ -501,8 +513,9 @@ private fun BenchmarkSection(
 
             Spacer(Modifier.height(8.dp))
 
-            val readableChar = services?.flatMap { it.characteristics }
-                ?.firstOrNull { it.properties.read }
+            val readableChar = remember(services) {
+                services?.flatMap { it.characteristics }?.firstOrNull { it.properties.read }
+            }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
