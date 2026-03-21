@@ -14,9 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -25,6 +25,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,18 +38,46 @@ import com.atruedev.kmpble.Identifier
 import com.atruedev.kmpble.scanner.Advertisement
 import com.atruedev.kmpble.scanner.EmissionPolicy
 import com.atruedev.kmpble.scanner.Scanner
-import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.flow.sample
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, FlowPreview::class)
+@Immutable
+private data class ScannedDevice(
+    val identifier: String,
+    val name: String?,
+    val rssi: Int,
+    val serviceUuids: List<String>,
+    val isLegacy: Boolean,
+    val isConnectable: Boolean,
+    val phyInfo: String?,
+)
+
+private fun Advertisement.toScannedDevice() = ScannedDevice(
+    identifier = identifier.value,
+    name = name,
+    rssi = rssi,
+    serviceUuids = serviceUuids.map { it.toString().take(8) },
+    isLegacy = isLegacy,
+    isConnectable = isConnectable,
+    phyInfo = if (!isLegacy) {
+        "Extended | PHY: $primaryPhy" +
+            (secondaryPhy?.let { " / $it" } ?: "") +
+            (advertisingSid?.let { " | SID: $it" } ?: "")
+    } else {
+        null
+    },
+)
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ScannerScreen(
     onDeviceSelected: (Advertisement) -> Unit,
     onServerTapped: () -> Unit = {},
 ) {
-    var devices by remember { mutableStateOf(emptyList<Advertisement>()) }
+    var devices by remember { mutableStateOf(emptyList<ScannedDevice>()) }
+    val advertisementLookup = remember { HashMap<String, Advertisement>() }
     val scope = rememberCoroutineScope()
 
     var legacyOnly by remember { mutableStateOf(true) }
@@ -60,10 +89,18 @@ fun ScannerScreen(
             this.legacyOnly = legacyOnly
         }
         val job = scope.launch {
-            scanner.advertisements
-                .onEach { deviceMap[it.identifier] = it }
-                .sample(250)
-                .collect { devices = deviceMap.values.sortedByDescending { adv -> adv.rssi } }
+            // Accumulate scan results without touching Compose state
+            launch {
+                scanner.advertisements.conflate().collect { deviceMap[it.identifier] = it }
+            }
+            // Snapshot to UI at fixed rate
+            while (isActive) {
+                delay(250)
+                val sorted = deviceMap.values.sortedByDescending { it.rssi }
+                advertisementLookup.clear()
+                sorted.forEach { advertisementLookup[it.identifier.value] = it }
+                devices = sorted.map { it.toScannedDevice() }
+            }
         }
         onDispose {
             job.cancel()
@@ -86,7 +123,6 @@ fun ScannerScreen(
         Column(
             modifier = Modifier.fillMaxSize().padding(padding),
         ) {
-            // BLE 5.0 extended advertising toggle
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -114,9 +150,14 @@ fun ScannerScreen(
                 ) {
                     items(
                         items = devices,
-                        key = { it.identifier.value },
-                    ) { advertisement ->
-                        DeviceCard(advertisement, onClick = { onDeviceSelected(advertisement) })
+                        key = { it.identifier },
+                    ) { device ->
+                        DeviceCard(
+                            device = device,
+                            onClick = {
+                                advertisementLookup[device.identifier]?.let(onDeviceSelected)
+                            },
+                        )
                     }
                 }
             }
@@ -126,7 +167,7 @@ fun ScannerScreen(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DeviceCard(advertisement: Advertisement, onClick: () -> Unit) {
+private fun DeviceCard(device: ScannedDevice, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
     ) {
@@ -137,56 +178,49 @@ private fun DeviceCard(advertisement: Advertisement, onClick: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = advertisement.name ?: "Unknown Device",
+                    text = device.name ?: "Unknown Device",
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "${advertisement.rssi} dBm",
+                    text = "${device.rssi} dBm",
                     style = MaterialTheme.typography.labelMedium,
-                    color = rssiColor(advertisement.rssi),
+                    color = rssiColor(device.rssi),
                 )
             }
 
             Spacer(Modifier.height(4.dp))
 
             Text(
-                text = advertisement.identifier.value,
+                text = device.identifier,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            if (advertisement.serviceUuids.isNotEmpty()) {
+            if (device.serviceUuids.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    for (uuid in advertisement.serviceUuids) {
-                        AssistChip(
+                    for (uuid in device.serviceUuids) {
+                        FilterChip(
+                            selected = true,
                             onClick = {},
-                            label = {
-                                Text(
-                                    text = uuid.toString().take(8),
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
-                            },
+                            label = { Text(uuid, style = MaterialTheme.typography.labelSmall) },
                         )
                     }
                 }
             }
 
-            // BLE 5.0 extended advertisement fields
-            if (!advertisement.isLegacy) {
+            device.phyInfo?.let {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "Extended | PHY: ${advertisement.primaryPhy}" +
-                        (advertisement.secondaryPhy?.let { " / $it" } ?: "") +
-                        (advertisement.advertisingSid?.let { " | SID: $it" } ?: ""),
+                    text = it,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.tertiary,
                 )
             }
 
-            if (!advertisement.isConnectable) {
+            if (!device.isConnectable) {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = "Not connectable",
