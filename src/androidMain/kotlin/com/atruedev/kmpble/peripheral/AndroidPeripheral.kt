@@ -134,16 +134,17 @@ public class AndroidPeripheral internal constructor(
         if (peripheralContext.bondState.value != BondState.NotBonded) return
         if (options.bondingPreference == BondingPreference.None) return
 
+        val bondTimeout = quirkRegistry.resolve(BleQuirks.BondStateTimeout)
         logEvent(BleLogEvent.BondEvent(identifier, "Quirk: bond-before-connect initiated"))
         try {
-            withTimeout(quirkRegistry.resolve(BleQuirks.BondStateTimeout)) {
+            withTimeout(bondTimeout) {
                 bondManager.createBond()
             }
             logEvent(BleLogEvent.BondEvent(identifier, "Quirk: bond-before-connect succeeded"))
         } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
             logEvent(BleLogEvent.Error(
                 identifier,
-                "Quirk: bond-before-connect timed out after ${quirkRegistry.resolve(BleQuirks.BondStateTimeout)}, proceeding with connection",
+                "Quirk: bond-before-connect timed out after $bondTimeout, proceeding with connection",
                 cause = null,
             ))
         }
@@ -344,14 +345,15 @@ public class AndroidPeripheral internal constructor(
                         && device.bondState != BluetoothDevice.BOND_BONDED
                     ) {
                         peripheralContext.processEvent(ConnectionEvent.BondRequired)
+                        val bondTimeout = quirkRegistry.resolve(BleQuirks.BondStateTimeout)
                         val bonded = try {
-                            withTimeout(quirkRegistry.resolve(BleQuirks.BondStateTimeout)) {
+                            withTimeout(bondTimeout) {
                                 bondManager.createBond()
                             }
                         } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
                             logEvent(BleLogEvent.Error(
                                 identifier,
-                                "Bond state change timed out after ${quirkRegistry.resolve(BleQuirks.BondStateTimeout)}",
+                                "Bond state change timed out after $bondTimeout",
                                 cause = null,
                             ))
                             false
