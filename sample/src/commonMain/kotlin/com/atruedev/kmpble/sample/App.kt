@@ -18,6 +18,8 @@ import com.atruedev.kmpble.scanner.Advertisement
 sealed interface Screen {
     data object Scanner : Screen
     data class DeviceDetail(val advertisement: Advertisement) : Screen
+    data class ServiceExplorer(val advertisement: Advertisement) : Screen
+    data class HeartRateDemo(val advertisement: Advertisement) : Screen
     data object Server : Screen
 }
 
@@ -47,6 +49,16 @@ fun App() {
                         is Screen.DeviceDetail -> DeviceDetailScreen(
                             advertisement = screen.advertisement,
                             onBack = { currentScreen = Screen.Scanner },
+                            onExploreServices = { currentScreen = Screen.ServiceExplorer(screen.advertisement) },
+                            onHeartRateDemo = { currentScreen = Screen.HeartRateDemo(screen.advertisement) },
+                        )
+                        is Screen.ServiceExplorer -> ServiceExplorerScreen(
+                            advertisement = screen.advertisement,
+                            onBack = { currentScreen = Screen.DeviceDetail(screen.advertisement) },
+                        )
+                        is Screen.HeartRateDemo -> HeartRateDemoScreen(
+                            advertisement = screen.advertisement,
+                            onBack = { currentScreen = Screen.DeviceDetail(screen.advertisement) },
                         )
                         Screen.Server -> ServerScreen(
                             onBack = { currentScreen = Screen.Scanner },
