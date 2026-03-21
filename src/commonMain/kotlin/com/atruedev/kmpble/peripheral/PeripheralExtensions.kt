@@ -1,7 +1,6 @@
 package com.atruedev.kmpble.peripheral
 
 import com.atruedev.kmpble.connection.ConnectionOptions
-import com.atruedev.kmpble.gatt.Characteristic
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlin.uuid.ExperimentalUuidApi
@@ -12,9 +11,8 @@ import kotlin.uuid.ExperimentalUuidApi
  * Useful for debugging — answers "what does this device expose?" in one call.
  * Only meaningful after service discovery completes (i.e., in [State.Connected.Ready]).
  *
- * Note: reads [state] and [services] as separate snapshots — under concurrent state
- * changes, the output may be momentarily inconsistent (e.g., state shows Ready but
- * services is null if a disconnect raced in between).
+ * Takes a consistent snapshot of [state] and [services] before formatting,
+ * so the output is internally coherent even under concurrent state changes.
  *
  * ```
  * peripheral.connect()
@@ -33,49 +31,51 @@ import kotlin.uuid.ExperimentalUuidApi
  * ```
  */
 @OptIn(ExperimentalUuidApi::class)
-public fun Peripheral.dump(): String = buildString {
-    appendLine("Peripheral: ${identifier.value} (state: ${state.value})")
+public fun Peripheral.dump(): String {
+    val snapshotState = state.value
+    val snapshotServices = services.value
 
-    val discovered = services.value
-    if (discovered.isNullOrEmpty()) {
-        appendLine("  (no services discovered)")
-        return@buildString
-    }
+    return buildString {
+        appendLine("Peripheral: ${identifier.value} (state: $snapshotState)")
 
-    discovered.forEachIndexed { svcIdx, service ->
-        val isLastService = svcIdx == discovered.lastIndex
-        val svcPrefix = if (isLastService) "└── " else "├── "
-        val childPrefix = if (isLastService) "    " else "│   "
+        if (snapshotServices.isNullOrEmpty()) {
+            appendLine("  (no services discovered)")
+            return@buildString
+        }
 
-        appendLine("${svcPrefix}Service ${service.uuid}")
+        snapshotServices.forEachIndexed { svcIdx, service ->
+            val isLastService = svcIdx == snapshotServices.lastIndex
+            val svcPrefix = if (isLastService) "└── " else "├── "
+            val childPrefix = if (isLastService) "    " else "│   "
 
-        service.characteristics.forEachIndexed { charIdx, char ->
-            val isLastChar = charIdx == service.characteristics.lastIndex
-            val charPrefix = if (isLastChar) "${childPrefix}└── " else "${childPrefix}├── "
-            val descPrefix = if (isLastChar) "${childPrefix}    " else "${childPrefix}│   "
+            appendLine("${svcPrefix}Service ${service.uuid}")
 
-            val props = buildProperties(char.properties)
-            appendLine("${charPrefix}Char ${char.uuid} [$props]")
+            service.characteristics.forEachIndexed { charIdx, char ->
+                val isLastChar = charIdx == service.characteristics.lastIndex
+                val charPrefix = if (isLastChar) "${childPrefix}└── " else "${childPrefix}├── "
+                val descPrefix = if (isLastChar) "${childPrefix}    " else "${childPrefix}│   "
 
-            char.descriptors.forEachIndexed { descIdx, desc ->
-                val isLastDesc = descIdx == char.descriptors.lastIndex
-                val dp = if (isLastDesc) "${descPrefix}└── " else "${descPrefix}├── "
-                appendLine("${dp}Desc ${desc.uuid}")
+                appendLine("${charPrefix}Char ${char.uuid} [${char.properties.displayName}]")
+
+                char.descriptors.forEachIndexed { descIdx, desc ->
+                    val isLastDesc = descIdx == char.descriptors.lastIndex
+                    val dp = if (isLastDesc) "${descPrefix}└── " else "${descPrefix}├── "
+                    val label = WELL_KNOWN_DESCRIPTORS[desc.uuid.toString()] ?: ""
+                    val suffix = if (label.isNotEmpty()) " ($label)" else ""
+                    appendLine("${dp}Desc ${desc.uuid}$suffix")
+                }
             }
         }
-    }
-}.trimEnd()
-
-private fun buildProperties(p: Characteristic.Properties): String {
-    return buildList {
-        if (p.read) add("read")
-        if (p.write) add("write")
-        if (p.writeWithoutResponse) add("writeNoResp")
-        if (p.signedWrite) add("signedWrite")
-        if (p.notify) add("notify")
-        if (p.indicate) add("indicate")
-    }.joinToString(", ")
+    }.trimEnd()
 }
+
+/** Well-known descriptor UUIDs for human-readable labels in dump(). */
+private val WELL_KNOWN_DESCRIPTORS = mapOf(
+    "00002902-0000-1000-8000-00805f9b34fb" to "CCCD",
+    "00002901-0000-1000-8000-00805f9b34fb" to "User Description",
+    "00002900-0000-1000-8000-00805f9b34fb" to "Extended Properties",
+    "00002904-0000-1000-8000-00805f9b34fb" to "Presentation Format",
+)
 
 /**
  * Connect, execute [block] in the Ready state, then disconnect and close.

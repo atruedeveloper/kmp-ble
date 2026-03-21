@@ -16,6 +16,9 @@ import kotlin.time.Duration.Companion.seconds
  */
 public object ConnectionRecipe {
 
+    /** BLE 4.2 maximum ATT MTU — 251 bytes minus 4 bytes L2CAP header. */
+    private const val BLE_4_2_MAX_ATT_MTU = 247
+
     /**
      * Medical / health monitoring devices (heart rate monitors, glucose sensors,
      * blood pressure cuffs, pulse oximeters).
@@ -26,7 +29,7 @@ public object ConnectionRecipe {
      * - Long timeout — medical devices can be slow to respond (bonding, encryption)
      */
     public val MEDICAL: ConnectionOptions = ConnectionOptions(
-        mtuRequest = 247,
+        mtuRequest = BLE_4_2_MAX_ATT_MTU,
         timeout = 60.seconds,
         reconnectionStrategy = ReconnectionStrategy.ExponentialBackoff(
             initialDelay = 1.seconds,
@@ -45,7 +48,7 @@ public object ConnectionRecipe {
      * - Moderate timeout — fitness devices respond reasonably fast
      */
     public val FITNESS: ConnectionOptions = ConnectionOptions(
-        mtuRequest = 247,
+        mtuRequest = BLE_4_2_MAX_ATT_MTU,
         timeout = 30.seconds,
         reconnectionStrategy = ReconnectionStrategy.ExponentialBackoff(
             initialDelay = 0.5.seconds,
@@ -82,7 +85,7 @@ public object ConnectionRecipe {
      * - Short timeout — consumer devices should connect quickly
      */
     public val CONSUMER: ConnectionOptions = ConnectionOptions(
-        mtuRequest = 247,
+        mtuRequest = BLE_4_2_MAX_ATT_MTU,
         timeout = 20.seconds,
         reconnectionStrategy = ReconnectionStrategy.ExponentialBackoff(
             initialDelay = 1.seconds,
