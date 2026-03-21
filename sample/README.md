@@ -2,11 +2,21 @@
 
 Compose Multiplatform app (Android + iOS) exercising the full kmp-ble v0.2 API surface.
 
+## Navigation
+
+```
+Scanner ──→ DeviceDetail (hub) ──→ Service Explorer
+       │                       └──→ Heart Rate Monitor
+       └──→ Server
+```
+
+Sub-screens share a single `BleViewModel` keyed by device identifier.
+
 ## Screens
 
 ### Scanner
 
-Discovers nearby BLE peripherals using legacy and BLE 5.0 extended scanning.
+Discovers nearby BLE peripherals with legacy and BLE 5.0 extended scanning.
 
 | API | Usage |
 |-----|-------|
@@ -14,99 +24,80 @@ Discovers nearby BLE peripherals using legacy and BLE 5.0 extended scanning.
 | `Advertisement` | Name, RSSI, service UUIDs, connectable flag |
 | `Advertisement.primaryPhy / secondaryPhy / advertisingSid` | BLE 5.0 extended advertisement metadata |
 | `EmissionPolicy.FirstThenChanges` | Reduces redundant scan results |
+| `ServiceUuid` | Well-known service name resolution in device cards |
 
-Scan results are collected into a `HashMap` and snapshotted to an `@Immutable` data class at 4 Hz to avoid recomposition storms in `LazyColumn`. Devices not seen for 10 seconds are evicted to keep the list bounded and relevant.
+Scan results are collected into a `HashMap` confined to `limitedParallelism(1)` and snapshotted to an `@Immutable` data class at 4 Hz. Devices not seen for 10 seconds are evicted.
 
-### Device Detail
+### Device Detail (Hub)
 
-Connects to a peripheral and exposes all GATT client operations.
-
-**Connection**
+Connection management with progressive disclosure. Shows connection options and device info. Navigation cards to sub-screens appear after connection.
 
 | API | Usage |
 |-----|-------|
 | `Peripheral.connect(ConnectionOptions)` | Configurable connection with auto-connect, bonding, reconnection |
 | `ConnectionRecipe.MEDICAL / FITNESS / IOT / CONSUMER` | Preset connection profiles |
 | `ReconnectionStrategy.ExponentialBackoff` | Automatic reconnection on disconnect |
-| `Peripheral.state` | Granular connection state machine (transport, auth, discovery, config) |
+| `Peripheral.state` | Granular connection state machine |
+| `PairingHandler` | Suspending callback for all pairing flows |
 
-**Pairing**
+Pairing is managed by `PairingCoordinator` using `Channel<PairingResponse>(RENDEZVOUS)`.
 
-| API | Usage |
-|-----|-------|
-| `PairingHandler` | Suspending callback for pairing events |
-| `PairingEvent.NumericComparison / PasskeyRequest / JustWorks / OOB` | All pairing flows |
-| `PairingResponse.Confirm / ProvidePin / ProvideOobData` | User responses |
-| `Peripheral.bondState` | Bond state tracking |
-| `Peripheral.removeBond()` | Bond removal |
+### Service Explorer
 
-Pairing is managed by `PairingCoordinator`, which uses a `Channel<PairingResponse>(RENDEZVOUS)` to suspend the pairing handler until the UI responds — no locks or mutable continuation vars.
-
-**GATT Operations**
+GATT tree browsing with read/write/observe operations, benchmarks, and L2CAP.
 
 | API | Usage |
 |-----|-------|
-| `Peripheral.read(characteristic)` | Read characteristic value |
-| `Peripheral.write(characteristic, data, writeType)` | Write with/without response |
-| `Peripheral.observe(characteristic, BackpressureStrategy.Latest)` | Subscribe to notifications/indications |
-| `Peripheral.readRssi()` | Live signal strength |
-| `Peripheral.requestMtu(mtu)` | MTU negotiation |
-| `Peripheral.maximumWriteValueLength` | MTU-derived write size |
+| `Peripheral.dump()` | Tree-formatted GATT service/characteristic/descriptor dump |
+| `Peripheral.read / write / observe` | Standard GATT operations |
+| `Peripheral.openL2capChannel(psm)` | High-throughput streaming channel |
+| `L2capChannel.write / incoming` | Stream-oriented data transfer |
+| `bleStopwatch` / `ThroughputMeter` / `LatencyTracker` | Connection and read benchmarks |
 
-**Benchmarks**
+L2CAP is managed by `L2capController` composed into `BleViewModel`.
+
+### Heart Rate Monitor
+
+End-to-end demo: auto-finds Heart Rate service (0x180D), subscribes via `observeValues()` for transparent reconnection, displays live BPM.
 
 | API | Usage |
 |-----|-------|
-| `bleStopwatch("connect") { peripheral.connect() }` | Connection timing |
-| `ThroughputMeter` | Bytes/sec across multiple reads |
-| `LatencyTracker` | p50/p95/p99 read latency stats |
+| `Peripheral.observeValues(characteristic)` | Connection-transparent value streaming |
+| Heart Rate Measurement (0x2A37) | Standard HR data parsing (8-bit and 16-bit formats) |
+
+Only accessible when the connected device advertises the Heart Rate service.
+
+**Two-phone demo:** Open the Server screen on phone A (hosts a Heart Rate service), scan with phone B, connect, and see live data in the Heart Rate Monitor.
 
 ### Server
 
-Hosts a GATT server with Heart Rate service and manages advertising.
-
-**GATT Server**
+GATT server hosting a Heart Rate service with legacy and BLE 5.0 extended advertising.
 
 | API | Usage |
 |-----|-------|
-| `GattServer { service { characteristic { onRead, properties, permissions } } }` | Declarative server builder |
-| `GattServer.open() / close()` | Server lifecycle |
-| `GattServer.notify(uuid, device, data)` | Push notifications to connected clients |
-| `GattServer.connectionEvents` | Connect/disconnect event stream |
-
-The `onRead` lambda captures a `StateFlow` reference (not a snapshot) so the returned heart rate value reflects the current state.
-
-**Advertising**
-
-| API | Usage |
-|-----|-------|
-| `Advertiser` | Legacy (BLE 4.x) advertising |
-| `AdvertiseConfig(name, serviceUuids, connectable)` | Legacy config |
-| `ExtendedAdvertiser` | BLE 5.0 multi-set advertising |
-| `ExtendedAdvertiseConfig(primaryPhy, secondaryPhy, interval)` | PHY and interval selection |
-| `Phy.Le1M / Le2M / LeCoded` | PHY options for range vs throughput |
+| `GattServer` | Heart Rate service with readable/notifiable characteristic |
+| `Advertiser` | Legacy connectable advertising |
+| `ExtendedAdvertiser` | BLE 5.0 advertising with PHY selection (1M/2M/Coded) |
 
 ## Architecture
 
 ```
-App.kt                  Navigation, adapter lifecycle, state restoration
-ScannerScreen.kt         Scan collection with @Immutable snapshot throttling
-DeviceDetailScreen.kt    GATT client UI, delegates to BleViewModel
-BleViewModel.kt          Peripheral lifecycle scoped to ViewModel
-PairingCoordinator.kt    Channel-based pairing state (composed into BleViewModel)
-ServerScreen.kt          Server/advertiser UI, delegates to ServerViewModel
-ServerViewModel.kt       Server + advertiser lifecycle scoped to ViewModel
+App.kt (navigation)
+├── ScannerScreen ── @Immutable ScannedDevice, limitedParallelism(1), TTL eviction
+├── DeviceDetailScreen (hub) ── ConnectionSection, InfoSection, NavigationCards
+│   ├── ServiceExplorerScreen ── GATT dump, read/write/observe, benchmarks, L2CAP
+│   └── HeartRateDemoScreen ── observeValues(), live BPM display
+├── ServerScreen ── ServerViewModel (server + advertiser lifecycle)
+└── Shared: BleViewModel ── PairingCoordinator, L2capController (composition)
 ```
 
-**Key patterns:**
-- `Peripheral.close()` in `ViewModel.onCleared()` prevents GATT connection leaks
-- All BLE operations scoped to `viewModelScope` for structured cancellation
-- `Channel(RENDEZVOUS)` for pairing instead of mutable continuation vars
-- `@Immutable` data classes for Compose skip optimization in scan list
-- `Flow.conflate()` + periodic snapshot decouples scan collection from rendering
+## Build & Run
 
-## Running
+```bash
+# Android
+./gradlew :sample:installDebug
 
-**Android:** `./gradlew :sample-android:installDebug`
-
-**iOS:** Open `iosApp/iosApp.xcodeproj` in Xcode, select a device, and run. BLE requires a physical device — simulators don't support CoreBluetooth scanning.
+# iOS
+open iosApp/iosApp.xcodeproj
+# Select "iosApp" scheme → Run on device
+```

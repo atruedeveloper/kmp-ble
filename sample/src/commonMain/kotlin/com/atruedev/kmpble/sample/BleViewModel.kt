@@ -14,6 +14,7 @@ import com.atruedev.kmpble.gatt.Characteristic
 import com.atruedev.kmpble.gatt.Observation
 import com.atruedev.kmpble.gatt.WriteType
 import com.atruedev.kmpble.peripheral.Peripheral
+import com.atruedev.kmpble.peripheral.dump
 import com.atruedev.kmpble.scanner.Advertisement
 import com.atruedev.kmpble.peripheral.toPeripheral
 import kotlinx.coroutines.flow.Flow
@@ -48,9 +49,17 @@ class BleViewModel(advertisement: Advertisement) : ViewModel() {
     val error: StateFlow<String?> = _error.asStateFlow()
 
     val pairing = PairingCoordinator()
+    val l2cap = L2capController(peripheral, viewModelScope)
 
     private val _benchmarkResult = MutableStateFlow<String?>(null)
     val benchmarkResult: StateFlow<String?> = _benchmarkResult.asStateFlow()
+
+    fun dump(): String = peripheral.dump()
+
+    fun observeValues(
+        characteristic: Characteristic,
+        backpressure: BackpressureStrategy = BackpressureStrategy.Latest,
+    ): Flow<ByteArray> = peripheral.observeValues(characteristic, backpressure)
 
     @OptIn(ExperimentalBleApi::class)
     fun benchmarkConnect(options: ConnectionOptions = ConnectionOptions()) {
@@ -142,6 +151,7 @@ class BleViewModel(advertisement: Advertisement) : ViewModel() {
     }
 
     override fun onCleared() {
+        l2cap.close()
         peripheral.close()
     }
 

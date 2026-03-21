@@ -35,9 +35,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.atruedev.kmpble.Identifier
+import com.atruedev.kmpble.ServiceUuid
 import com.atruedev.kmpble.scanner.Advertisement
 import com.atruedev.kmpble.scanner.EmissionPolicy
 import com.atruedev.kmpble.scanner.Scanner
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.conflate
@@ -58,11 +61,12 @@ private data class ScannedDevice(
     val phyInfo: String?,
 )
 
+@OptIn(ExperimentalUuidApi::class)
 private fun Advertisement.toScannedDevice() = ScannedDevice(
     identifier = identifier.value,
     name = name,
     rssi = rssi,
-    serviceUuids = serviceUuids.map { it.toString().take(8) },
+    serviceUuids = serviceUuids.map { uuid -> wellKnownServiceName(uuid) ?: uuid.toString().take(8) },
     isLegacy = isLegacy,
     isConnectable = isConnectable,
     phyInfo = if (!isLegacy) {
@@ -121,7 +125,7 @@ fun ScannerScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("kmp-ble Scanner") },
+                title = { Text("BLE Explorer") },
                 actions = {
                     TextButton(onClick = onServerTapped) {
                         Text("Server")
@@ -248,3 +252,17 @@ private fun rssiColor(rssi: Int) = when {
     rssi >= -70 -> MaterialTheme.colorScheme.tertiary
     else -> MaterialTheme.colorScheme.error
 }
+
+@OptIn(ExperimentalUuidApi::class)
+private val WELL_KNOWN_SERVICES: Map<Uuid, String> = mapOf(
+    ServiceUuid.HEART_RATE to "Heart Rate",
+    ServiceUuid.BATTERY to "Battery",
+    ServiceUuid.DEVICE_INFORMATION to "Device Info",
+    ServiceUuid.HEALTH_THERMOMETER to "Thermometer",
+    ServiceUuid.GLUCOSE to "Glucose",
+    ServiceUuid.CURRENT_TIME to "Current Time",
+    ServiceUuid.GENERIC_ACCESS to "Generic Access",
+)
+
+@OptIn(ExperimentalUuidApi::class)
+private fun wellKnownServiceName(uuid: Uuid): String? = WELL_KNOWN_SERVICES[uuid]

@@ -1,5 +1,7 @@
 package com.atruedev.kmpble.sample
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -12,12 +14,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -49,17 +50,17 @@ import com.atruedev.kmpble.connection.ConnectionOptions
 import com.atruedev.kmpble.connection.ConnectionRecipe
 import com.atruedev.kmpble.connection.ReconnectionStrategy
 import com.atruedev.kmpble.connection.State
-import com.atruedev.kmpble.gatt.Characteristic
-import com.atruedev.kmpble.gatt.DiscoveredService
-import com.atruedev.kmpble.gatt.Observation
-import com.atruedev.kmpble.gatt.WriteType
+import com.atruedev.kmpble.ServiceUuid
 import com.atruedev.kmpble.scanner.Advertisement
+import kotlin.uuid.ExperimentalUuidApi
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalBleApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalBleApi::class, ExperimentalUuidApi::class)
 @Composable
 fun DeviceDetailScreen(
     advertisement: Advertisement,
     onBack: () -> Unit,
+    onExploreServices: () -> Unit,
+    onHeartRateDemo: () -> Unit,
 ) {
     val vm = viewModel { BleViewModel(advertisement) }
 
@@ -71,9 +72,10 @@ fun DeviceDetailScreen(
     val maxWriteLen by vm.maximumWriteValueLength.collectAsState()
     val error by vm.error.collectAsState()
     val pairingEvent by vm.pairing.event.collectAsState()
-    val benchmarkResult by vm.benchmarkResult.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
+    val isConnected = state is State.Connected
+    val hasHeartRate = services?.any { it.uuid == ServiceUuid.HEART_RATE } == true
 
     LaunchedEffect(error) {
         error?.let {
@@ -104,25 +106,75 @@ fun DeviceDetailScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { ConnectionSection(state, bond, vm) }
-            item { InfoSection(rssi, mtu, maxWriteLen, vm) }
-            item { BenchmarkSection(state, services, benchmarkResult, vm) }
 
-            val serviceList = services
-            if (serviceList != null) {
-                items(serviceList) { service ->
-                    ServiceCard(service, vm)
+            if (isConnected) {
+                item { InfoSection(rssi, mtu, maxWriteLen, vm) }
+            }
+
+            item {
+                AnimatedVisibility(isConnected) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        NavigationCard(
+                            title = "Explore Services",
+                            description = "Browse GATT tree, read/write characteristics, benchmarks, L2CAP",
+                            onClick = onExploreServices,
+                        )
+
+                        if (hasHeartRate) {
+                            NavigationCard(
+                                title = "Heart Rate Monitor",
+                                description = "Live BPM with transparent reconnection",
+                                onClick = onHeartRateDemo,
+                                highlight = true,
+                            )
+                        }
+                    }
                 }
-            } else if (state is State.Connected) {
+            }
+
+            if (!isConnected) {
                 item {
                     Text(
-                        "Discovering services...",
+                        "Connect to explore this device.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 24.dp),
                     )
                 }
             }
 
             item { Spacer(Modifier.height(16.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun NavigationCard(
+    title: String,
+    description: String,
+    onClick: () -> Unit,
+    highlight: Boolean = false,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        colors = if (highlight) {
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        } else {
+            CardDefaults.cardColors()
+        },
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (highlight) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
         }
     }
 }
@@ -284,166 +336,27 @@ private fun InfoSection(rssi: Int?, mtu: Int, maxWriteLen: Int, vm: BleViewModel
     }
 }
 
-@Composable
-private fun ServiceCard(service: DiscoveredService, vm: BleViewModel) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "Service: ${service.uuid.toString().take(8)}...",
-                style = MaterialTheme.typography.titleSmall,
-            )
-
-            for ((index, char) in service.characteristics.withIndex()) {
-                if (index > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                CharacteristicRow(char, vm)
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun CharacteristicRow(characteristic: Characteristic, vm: BleViewModel) {
-    val props = characteristic.properties
-    var readValue by remember { mutableStateOf<String?>(null) }
-    var writeInput by remember { mutableStateOf("") }
-    var writeError by remember { mutableStateOf(false) }
-    var observedValue by remember { mutableStateOf<String?>(null) }
-    var isObserving by remember { mutableStateOf(false) }
-
-    if (isObserving) {
-        LaunchedEffect(characteristic) {
-            vm.observe(characteristic).collect { observation ->
-                observedValue = when (observation) {
-                    is Observation.Value -> observation.data.toHexString()
-                    is Observation.Disconnected -> "Disconnected"
-                }
-            }
-        }
-    }
-
-    Column {
-        Text(
-            text = characteristic.uuid.toString().take(8) + "...",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (props.read) PropertyBadge("R")
-            if (props.write) PropertyBadge("W")
-            if (props.writeWithoutResponse) PropertyBadge("WnR")
-            if (props.notify) PropertyBadge("N")
-            if (props.indicate) PropertyBadge("I")
-        }
-
-        Spacer(Modifier.height(4.dp))
-
-        if (props.read) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(
-                    onClick = {
-                        vm.readCharacteristic(characteristic) { result ->
-                            readValue = result.fold(
-                                onSuccess = { it.toHexString() },
-                                onFailure = { "Error: ${it.message}" },
-                            )
-                        }
-                    },
-                ) { Text("Read") }
-                readValue?.let {
-                    Text(text = it, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        }
-
-        if (props.write || props.writeWithoutResponse) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedTextField(
-                    value = writeInput,
-                    onValueChange = { writeInput = it; writeError = false },
-                    label = { Text("Hex") },
-                    modifier = Modifier.width(120.dp),
-                    singleLine = true,
-                    isError = writeError,
-                )
-                OutlinedButton(
-                    onClick = {
-                        try {
-                            val bytes = writeInput.hexToByteArray()
-                            val type = if (props.write) WriteType.WithResponse else WriteType.WithoutResponse
-                            vm.writeCharacteristic(characteristic, bytes, type)
-                        } catch (_: IllegalArgumentException) {
-                            writeError = true
-                        }
-                    },
-                ) { Text("Write") }
-            }
-        }
-
-        if (props.notify || props.indicate) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("Observe", style = MaterialTheme.typography.bodySmall)
-                Switch(
-                    checked = isObserving,
-                    onCheckedChange = { isObserving = it },
-                )
-                observedValue?.let {
-                    Text(text = it, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PropertyBadge(label: String) {
-    FilterChip(
-        selected = true,
-        onClick = {},
-        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-    )
-}
-
 @OptIn(ExperimentalBleApi::class)
 @Composable
 private fun PairingDialog(event: PairingEvent, onRespond: (PairingResponse) -> Unit) {
     var pinInput by remember { mutableStateOf("") }
 
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(16.dp),
-    ) {
+    Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text("Pairing Request", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(8.dp))
 
             when (event) {
                 is PairingEvent.NumericComparison -> {
-                    Text(
-                        "Confirm the number matches: ${event.numericValue}",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+                    Text("Confirm the number matches: ${event.numericValue}")
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { onRespond(PairingResponse.Confirm(true)) }) {
-                            Text("Confirm")
-                        }
-                        OutlinedButton(onClick = { onRespond(PairingResponse.Confirm(false)) }) {
-                            Text("Reject")
-                        }
+                        Button(onClick = { onRespond(PairingResponse.Confirm(true)) }) { Text("Confirm") }
+                        OutlinedButton(onClick = { onRespond(PairingResponse.Confirm(false)) }) { Text("Reject") }
                     }
                 }
-
                 is PairingEvent.PasskeyRequest -> {
-                    Text("Enter the passkey:", style = MaterialTheme.typography.bodyMedium)
+                    Text("Enter the passkey:")
                     Spacer(Modifier.height(4.dp))
                     OutlinedTextField(
                         value = pinInput,
@@ -453,91 +366,30 @@ private fun PairingDialog(event: PairingEvent, onRespond: (PairingResponse) -> U
                         modifier = Modifier.width(120.dp),
                     )
                     Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = { pinInput.toIntOrNull()?.let { onRespond(PairingResponse.ProvidePin(it)) } },
-                    ) { Text("Submit") }
-                }
-
-                is PairingEvent.PasskeyNotification -> {
-                    Text(
-                        "Passkey displayed on device: ${event.passkey}",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(onClick = { onRespond(PairingResponse.Confirm(true)) }) {
-                        Text("OK")
+                    Button(onClick = { pinInput.toIntOrNull()?.let { onRespond(PairingResponse.ProvidePin(it)) } }) {
+                        Text("Submit")
                     }
                 }
-
+                is PairingEvent.PasskeyNotification -> {
+                    Text("Passkey displayed on device: ${event.passkey}")
+                    Spacer(Modifier.height(8.dp))
+                    Button(onClick = { onRespond(PairingResponse.Confirm(true)) }) { Text("OK") }
+                }
                 is PairingEvent.JustWorksConfirmation -> {
-                    Text("Allow pairing with this device?", style = MaterialTheme.typography.bodyMedium)
+                    Text("Allow pairing with this device?")
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { onRespond(PairingResponse.Confirm(true)) }) {
-                            Text("Allow")
-                        }
-                        OutlinedButton(onClick = { onRespond(PairingResponse.Confirm(false)) }) {
-                            Text("Deny")
-                        }
+                        Button(onClick = { onRespond(PairingResponse.Confirm(true)) }) { Text("Allow") }
+                        OutlinedButton(onClick = { onRespond(PairingResponse.Confirm(false)) }) { Text("Deny") }
                     }
                 }
-
                 is PairingEvent.OutOfBandDataRequest -> {
-                    Text("OOB pairing requested. Providing empty OOB data.", style = MaterialTheme.typography.bodyMedium)
+                    Text("OOB pairing requested.")
                     Spacer(Modifier.height(8.dp))
                     Button(onClick = { onRespond(PairingResponse.ProvideOobData(ByteArray(16))) }) {
                         Text("Provide OOB Data")
                     }
                 }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalBleApi::class)
-@Composable
-private fun BenchmarkSection(
-    state: State,
-    services: List<DiscoveredService>?,
-    benchmarkResult: String?,
-    vm: BleViewModel,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("Benchmarks", style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                "Measure connection time and GATT read throughput/latency.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            val readableChar = remember(services) {
-                services?.flatMap { it.characteristics }?.firstOrNull { it.properties.read }
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = { vm.benchmarkConnect() },
-                    enabled = state is State.Connected || state is State.Disconnected,
-                ) { Text("Bench Connect") }
-
-                OutlinedButton(
-                    onClick = { readableChar?.let { vm.benchmarkReads(it) } },
-                    enabled = state is State.Connected && readableChar != null,
-                ) { Text("Bench Reads") }
-            }
-
-            benchmarkResult?.let {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
     }
