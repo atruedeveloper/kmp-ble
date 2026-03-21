@@ -37,39 +37,23 @@ class ServerViewModel : ViewModel() {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    private val server by lazy {
-        GattServer {
-            service(HEART_RATE_SERVICE) {
-                characteristic(HEART_RATE_MEASUREMENT) {
-                    properties { read = true; notify = true }
-                    permissions { read = true }
-                    onRead { _ -> BleData(byteArrayOf(0x00, _heartRate.value.toByte())) }
-                }
+    private val server = GattServer {
+        service(HEART_RATE_SERVICE) {
+            characteristic(HEART_RATE_MEASUREMENT) {
+                properties { read = true; notify = true }
+                permissions { read = true }
+                onRead { _ -> BleData(byteArrayOf(0x00, _heartRate.value.toByte())) }
             }
         }
     }
 
-    private val advertiser by lazy { Advertiser() }
-    private val extAdvertiser by lazy { ExtendedAdvertiser() }
+    private val advertiser = Advertiser()
+    private val extAdvertiser = ExtendedAdvertiser()
 
-    private var advertiserInitialized = false
-    private var extAdvertiserInitialized = false
-    private var serverInitialized = false
-
-    val isAdvertising: StateFlow<Boolean>
-        get() {
-            advertiserInitialized = true
-            return advertiser.isAdvertising
-        }
-
-    val activeSets: StateFlow<Set<Int>>
-        get() {
-            extAdvertiserInitialized = true
-            return extAdvertiser.activeSets
-        }
+    val isAdvertising: StateFlow<Boolean> = advertiser.isAdvertising
+    val activeSets: StateFlow<Set<Int>> = extAdvertiser.activeSets
 
     fun openServer() {
-        serverInitialized = true
         launchWithErrorHandling {
             server.open()
             _serverOpen.value = true
@@ -101,7 +85,6 @@ class ServerViewModel : ViewModel() {
     }
 
     fun startLegacyAdvertising() {
-        advertiserInitialized = true
         try {
             advertiser.startAdvertising(
                 AdvertiseConfig(
@@ -111,12 +94,11 @@ class ServerViewModel : ViewModel() {
                 ),
             )
         } catch (e: Exception) {
-            _error.value = "Start failed: ${e.message}"
+            _error.value = e.message ?: "Unknown error"
         }
     }
 
     fun startExtendedSet(primary: Phy, secondary: Phy, name: String, interval: AdvertiseInterval) {
-        extAdvertiserInitialized = true
         launchWithErrorHandling {
             extAdvertiser.startAdvertisingSet(
                 ExtendedAdvertiseConfig(
@@ -164,9 +146,9 @@ class ServerViewModel : ViewModel() {
     }
 
     override fun onCleared() {
-        if (advertiserInitialized) advertiser.close()
-        if (extAdvertiserInitialized) extAdvertiser.close()
-        if (serverInitialized) server.close()
+        advertiser.close()
+        extAdvertiser.close()
+        server.close()
     }
 
     private fun launchWithErrorHandling(block: suspend () -> Unit) {
