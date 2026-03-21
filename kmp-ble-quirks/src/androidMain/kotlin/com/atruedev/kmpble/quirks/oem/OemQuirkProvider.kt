@@ -18,17 +18,17 @@ import kotlin.time.Duration.Companion.seconds
  */
 public class OemQuirkProvider : QuirkProvider {
 
-    override fun contribute(registry: QuirkRegistry) {
-        registry.register(BleQuirks.BondBeforeConnect, true) {
+    override fun contribute(builder: QuirkRegistry.Builder) {
+        builder.register(BleQuirks.BondBeforeConnect, true) {
             DeviceMatch.matchesAny(it, BOND_BEFORE_CONNECT)
         }
-        registry.register(BleQuirks.GattRetryDelay, GATT_RETRY_DELAY)
-        registry.register(BleQuirks.GattRetryCount, GATT_RETRY_COUNT)
-        registry.register(BleQuirks.RefreshServicesOnBond, true) {
+        builder.register(BleQuirks.GattRetryDelay, GATT_RETRY_DELAY)
+        builder.register(BleQuirks.GattRetryCount, GATT_RETRY_COUNT)
+        builder.register(BleQuirks.RefreshServicesOnBond, true) {
             DeviceMatch.matchesAny(it, REFRESH_SERVICES_ON_BOND)
         }
-        registry.register(BleQuirks.BondStateTimeout, BOND_STATE_TIMEOUT)
-        registry.register(BleQuirks.ConnectionTimeout, CONNECTION_TIMEOUT)
+        builder.register(BleQuirks.BondStateTimeout, BOND_STATE_TIMEOUT)
+        builder.register(BleQuirks.ConnectionTimeout, CONNECTION_TIMEOUT)
     }
 
     private companion object {

@@ -13,8 +13,8 @@ import kotlin.time.Duration.Companion.seconds
 class OemQuirkProviderTest {
 
     private fun registryFor(manufacturer: String, model: String, display: String): QuirkRegistry =
-        QuirkRegistry.createForTest(DeviceInfo(manufacturer, model, display)).also {
-            it.addProvider(OemQuirkProvider())
+        QuirkRegistry.createForTest(DeviceInfo(manufacturer, model, display)) {
+            addProvider(OemQuirkProvider())
         }
 
     // === Bond before connect ===
@@ -277,21 +277,22 @@ class OemQuirkProviderTest {
         assertTrue(desc.contains("retry=3x"))
     }
 
-    // === User overrides take priority ===
+    // === User overrides ===
 
     @Test
     fun `user override takes priority over OEM provider`() {
-        val registry = registryFor("samsung", "sm-g991b", "g991bxxu1aua1")
-        registry.addProvider(OemQuirkProvider())
-        registry.register(BleQuirks.GattRetryCount, 5) { it.manufacturer == "samsung" }
+        val registry = QuirkRegistry.createForTest(DeviceInfo("samsung", "sm-g991b", "g991bxxu1aua1")) {
+            addProvider(OemQuirkProvider())
+            register(BleQuirks.GattRetryCount, 5) { it.manufacturer == "samsung" }
+        }
         assertEquals(5, registry.resolve(BleQuirks.GattRetryCount))
     }
 
     @Test
     fun `user override with device key string`() {
-        val registry = registryFor("acme", "widget-3000", "v1.0")
-        registry.addProvider(OemQuirkProvider())
-        registry.register(BleQuirks.BondBeforeConnect, true, "acme")
+        val registry = QuirkRegistry.createForTest(DeviceInfo("acme", "widget-3000", "v1.0")) {
+            register(BleQuirks.BondBeforeConnect, true, "acme")
+        }
         assertTrue(registry.resolve(BleQuirks.BondBeforeConnect))
     }
 }
