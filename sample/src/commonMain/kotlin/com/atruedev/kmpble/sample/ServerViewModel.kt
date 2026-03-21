@@ -74,7 +74,7 @@ class ServerViewModel : ViewModel() {
         _heartRate.value = (60..180).random()
     }
 
-    fun notifyAll() {
+    fun notifyClients() {
         viewModelScope.launch {
             try {
                 server.notify(

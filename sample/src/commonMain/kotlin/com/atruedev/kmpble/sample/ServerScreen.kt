@@ -128,7 +128,7 @@ private fun GattServerCard(serverOpen: Boolean, heartRate: Int, vm: ServerViewMo
                     OutlinedButton(onClick = { vm.randomizeHeartRate() }) {
                         Text("Randomize")
                     }
-                    OutlinedButton(onClick = { vm.notifyAll() }) {
+                    OutlinedButton(onClick = { vm.notifyClients() }) {
                         Text("Notify All")
                     }
                 }
