@@ -15,6 +15,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
+      release_url: ${{ steps.release.outputs.release_url }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -52,6 +53,7 @@ jobs:
           zip -r KmpBle.xcframework.zip KmpBle.xcframework
 
       - name: Create release and upload XCFramework
+        id: release
         run: |
           gh release create ${{ github.ref_name }} \
             --title "${{ github.ref_name }}" \
@@ -59,6 +61,7 @@ jobs:
           gh release upload ${{ github.ref_name }} \
             build/XCFrameworks/release/KmpBle.xcframework.zip \
             --clobber
+          echo "release_url=https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -103,16 +106,10 @@ jobs:
           fetch-depth: 0
 
       - name: Get release metadata
-        id: version
+        id: meta
         run: |
-          VERSION="${{ needs.publish.outputs.version }}"
-          TAG="${{ needs.publish.outputs.tag }}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
-
-          # Find the previous tag (most recent tag before this one)
-          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${TAG}$" | head -1)
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${{ needs.publish.outputs.tag }}$" | head -1)
           echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
 
       - name: Generate changelog entries from merged PRs
@@ -120,12 +117,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          PREV_TAG="${{ steps.version.outputs.prev_tag }}"
-          TAG="${{ steps.version.outputs.tag }}"
+          PREV_TAG="${{ steps.meta.outputs.prev_tag }}"
+          TAG="${{ needs.publish.outputs.tag }}"
 
-          # Get merge commits between previous tag and HEAD to find merged PRs
           PR_NUMBERS=$(git log "${PREV_TAG}..HEAD" --oneline --grep="Merge pull request" \
-            | grep -oP '#\K[0-9]+' || true)
+            | grep -oE '#[0-9]+' | tr -d '#' || true)
 
           ADDED=""
           CHANGED=""
@@ -199,15 +195,15 @@ jobs:
 
       - name: Update README.md
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${{ needs.publish.outputs.version }}"
           sed -i "s|implementation(\"com.atruedev:kmp-ble:[^\"]*\")|implementation(\"com.atruedev:kmp-ble:$VERSION\")|g" README.md
 
       - name: Update CHANGELOG.md
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.tag }}"
-          PREV_TAG="${{ steps.version.outputs.prev_tag }}"
-          DATE="${{ steps.version.outputs.date }}"
+          VERSION="${{ needs.publish.outputs.version }}"
+          TAG="${{ needs.publish.outputs.tag }}"
+          PREV_TAG="${{ steps.meta.outputs.prev_tag }}"
+          DATE="${{ steps.meta.outputs.date }}"
           ENTRIES=$(cat /tmp/changelog_entries.txt)
 
           # Build the new CHANGELOG content using awk for reliable multi-line insertion
@@ -240,15 +236,15 @@ jobs:
 
       - name: Update ROADMAP.md
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${{ needs.publish.outputs.version }}"
           sed -i "s|^\*Current as of v.*\*$|*Current as of v$VERSION*|" ROADMAP.md
 
       - name: Create Pull Request
         id: create-pr
         uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
         with:
-          commit-message: "docs: update docs for v${{ steps.version.outputs.version }}"
-          title: "docs: update docs for v${{ steps.version.outputs.version }}"
+          commit-message: "docs: update docs for v${{ needs.publish.outputs.version }}"
+          title: "docs: update docs for v${{ needs.publish.outputs.version }}"
           body: |
             Automated PR to update project docs with the new release version.
 
@@ -257,8 +253,8 @@ jobs:
             - `CHANGELOG.md` — auto-generated entries from merged PRs
             - `ROADMAP.md` — "Current as of" footer
 
-            Release: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}
-          branch: update-docs-${{ steps.version.outputs.version }}
+            Release: ${{ needs.publish.outputs.release_url }}
+          branch: update-docs-${{ needs.publish.outputs.version }}
           base: main
           delete-branch: true
 
