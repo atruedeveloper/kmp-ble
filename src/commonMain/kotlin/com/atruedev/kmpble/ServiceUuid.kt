@@ -27,8 +27,10 @@ import kotlin.uuid.Uuid
 public object ServiceUuid {
 
     private val _all = mutableListOf<Uuid>()
-    private fun sig(shortCode: String): Uuid = uuidFrom(shortCode).also { _all += it }
-    private fun vendor(fullUuid: String): Uuid = uuidFrom(fullUuid).also { _all += it }
+    private var frozen = false
+    private fun register(uuid: Uuid): Uuid { check(!frozen) { "Add new UUIDs above ALL" }; _all += uuid; return uuid }
+    private fun sig(shortCode: String): Uuid = register(uuidFrom(shortCode))
+    private fun vendor(fullUuid: String): Uuid = register(uuidFrom(fullUuid))
 
     public val GENERIC_ACCESS: Uuid = sig("1800")
     public val GENERIC_ATTRIBUTE: Uuid = sig("1801")
@@ -95,5 +97,5 @@ public object ServiceUuid {
     public val NORDIC_UART: Uuid = vendor("6e400001-b5a3-f393-e0a9-e50e24dcca9e")
 
     /** All UUIDs defined in this object, auto-populated via [sig] and [vendor]. */
-    public val ALL: List<Uuid> = _all.toList()
+    public val ALL: List<Uuid> = _all.toList().also { frozen = true }
 }
