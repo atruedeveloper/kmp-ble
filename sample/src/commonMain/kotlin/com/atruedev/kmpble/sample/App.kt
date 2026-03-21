@@ -28,13 +28,9 @@ sealed interface Screen {
 @OptIn(ExperimentalBleApi::class)
 @Composable
 fun App() {
-    // Wire up structured logging to console
     LaunchedEffect(Unit) {
         BleLogConfig.logger = PrintBleLogger()
-
-        // Enable iOS Core Bluetooth state restoration.
-        // On Android this is a no-op. On iOS, this allows the system to restore
-        // BLE connections after the app is terminated in the background.
+        // No-op on Android; enables BLE connection restoration after background termination on iOS.
         enableStateRestoration(StateRestorationConfig(identifier = "com.atruedev.kmpble.sample"))
     }
 

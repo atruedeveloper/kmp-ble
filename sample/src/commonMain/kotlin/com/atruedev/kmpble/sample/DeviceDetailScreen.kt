@@ -34,7 +34,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,7 +53,6 @@ import com.atruedev.kmpble.gatt.DiscoveredService
 import com.atruedev.kmpble.gatt.Observation
 import com.atruedev.kmpble.gatt.WriteType
 import com.atruedev.kmpble.scanner.Advertisement
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalBleApi::class)
 @Composable
@@ -62,8 +60,6 @@ fun DeviceDetailScreen(
     advertisement: Advertisement,
     onBack: () -> Unit,
 ) {
-    // ViewModel is scoped to this composable's lifecycle.
-    // When navigating back, onCleared() fires → peripheral.close().
     val vm = viewModel { BleViewModel(advertisement) }
 
     val state by vm.connectionState.collectAsState()
@@ -73,11 +69,10 @@ fun DeviceDetailScreen(
     val mtu by vm.mtu.collectAsState()
     val maxWriteLen by vm.maximumWriteValueLength.collectAsState()
     val error by vm.error.collectAsState()
-    val pairingEvent by vm.pairingEvent.collectAsState()
+    val pairingEvent by vm.pairing.event.collectAsState()
     val benchmarkResult by vm.benchmarkResult.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(error) {
         error?.let {
@@ -86,9 +81,8 @@ fun DeviceDetailScreen(
         }
     }
 
-    // Pairing dialog overlay
     pairingEvent?.let { event ->
-        PairingDialog(event = event, onRespond = { vm.respondToPairing(it) })
+        PairingDialog(event = event, onRespond = { vm.pairing.respond(it) })
     }
 
     Scaffold(
@@ -108,16 +102,10 @@ fun DeviceDetailScreen(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // Connection section with recipe picker
             item { ConnectionSection(state, bond, vm) }
-
-            // Info section
             item { InfoSection(rssi, mtu, maxWriteLen, vm) }
-
-            // Benchmark section
             item { BenchmarkSection(state, services, benchmarkResult, vm) }
 
-            // Services section
             val serviceList = services
             if (serviceList != null) {
                 items(serviceList) { service ->
@@ -138,12 +126,13 @@ fun DeviceDetailScreen(
     }
 }
 
-private enum class RecipeOption(val label: String) {
+@OptIn(ExperimentalBleApi::class)
+private enum class RecipeOption(val label: String, val options: ConnectionOptions? = null) {
     Custom("Custom"),
-    Medical("Medical"),
-    Fitness("Fitness"),
-    IoT("IoT"),
-    Consumer("Consumer"),
+    Medical("Medical", ConnectionRecipe.MEDICAL),
+    Fitness("Fitness", ConnectionRecipe.FITNESS),
+    IoT("IoT", ConnectionRecipe.IOT),
+    Consumer("Consumer", ConnectionRecipe.CONSUMER),
 }
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalBleApi::class)
@@ -159,7 +148,6 @@ private fun ConnectionSection(state: State, bond: BondState, vm: BleViewModel) {
             Text("Connection", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(8.dp))
 
-            // State chip
             FilterChip(
                 selected = state is State.Connected,
                 onClick = {},
@@ -168,7 +156,6 @@ private fun ConnectionSection(state: State, bond: BondState, vm: BleViewModel) {
 
             Spacer(Modifier.height(8.dp))
 
-            // Connection Recipe picker
             Text("Connection Recipe", style = MaterialTheme.typography.bodySmall)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 for (recipe in RecipeOption.entries) {
@@ -180,7 +167,6 @@ private fun ConnectionSection(state: State, bond: BondState, vm: BleViewModel) {
                 }
             }
 
-            // Show custom options only when Custom recipe is selected
             if (selectedRecipe == RecipeOption.Custom) {
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -209,29 +195,19 @@ private fun ConnectionSection(state: State, bond: BondState, vm: BleViewModel) {
 
             Spacer(Modifier.height(8.dp))
 
-            // Connect/Disconnect buttons
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = {
-                        val options = when (selectedRecipe) {
-                            RecipeOption.Medical -> ConnectionRecipe.MEDICAL
-                            RecipeOption.Fitness -> ConnectionRecipe.FITNESS
-                            RecipeOption.IoT -> ConnectionRecipe.IOT
-                            RecipeOption.Consumer -> ConnectionRecipe.CONSUMER
-                            RecipeOption.Custom -> ConnectionOptions(
-                                autoConnect = autoConnect,
-                                bondingPreference = bondingPref,
-                                reconnectionStrategy = if (useReconnection) {
-                                    ReconnectionStrategy.ExponentialBackoff()
-                                } else {
-                                    ReconnectionStrategy.None
-                                },
-                            )
-                        }.let { base ->
-                            // Attach pairing handler to all connections
-                            base.copy(pairingHandler = vm.pairingHandler)
-                        }
-                        vm.connect(options)
+                        val baseOptions = selectedRecipe.options ?: ConnectionOptions(
+                            autoConnect = autoConnect,
+                            bondingPreference = bondingPref,
+                            reconnectionStrategy = if (useReconnection) {
+                                ReconnectionStrategy.ExponentialBackoff()
+                            } else {
+                                ReconnectionStrategy.None
+                            },
+                        )
+                        vm.connect(baseOptions.copy(pairingHandler = vm.pairing.handler))
                     },
                     enabled = state is State.Disconnected,
                 ) { Text("Connect") }
@@ -242,7 +218,6 @@ private fun ConnectionSection(state: State, bond: BondState, vm: BleViewModel) {
                 ) { Text("Disconnect") }
             }
 
-            // Bond state
             Spacer(Modifier.height(8.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -318,9 +293,20 @@ private fun CharacteristicRow(characteristic: Characteristic, vm: BleViewModel) 
     val props = characteristic.properties
     var readValue by remember { mutableStateOf<String?>(null) }
     var writeInput by remember { mutableStateOf("") }
+    var writeError by remember { mutableStateOf(false) }
     var observedValue by remember { mutableStateOf<String?>(null) }
     var isObserving by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+
+    if (isObserving) {
+        LaunchedEffect(characteristic) {
+            vm.observe(characteristic).collect { observation ->
+                observedValue = when (observation) {
+                    is Observation.Value -> observation.data.toHexString()
+                    is Observation.Disconnected -> "Disconnected"
+                }
+            }
+        }
+    }
 
     Column {
         Text(
@@ -328,7 +314,6 @@ private fun CharacteristicRow(characteristic: Characteristic, vm: BleViewModel) 
             style = MaterialTheme.typography.bodyMedium,
         )
 
-        // Property badges
         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (props.read) PropertyBadge("R")
             if (props.write) PropertyBadge("W")
@@ -339,7 +324,6 @@ private fun CharacteristicRow(characteristic: Characteristic, vm: BleViewModel) 
 
         Spacer(Modifier.height(4.dp))
 
-        // Read
         if (props.read) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -361,7 +345,6 @@ private fun CharacteristicRow(characteristic: Characteristic, vm: BleViewModel) 
             }
         }
 
-        // Write
         if (props.write || props.writeWithoutResponse) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -369,10 +352,11 @@ private fun CharacteristicRow(characteristic: Characteristic, vm: BleViewModel) 
             ) {
                 OutlinedTextField(
                     value = writeInput,
-                    onValueChange = { writeInput = it },
+                    onValueChange = { writeInput = it; writeError = false },
                     label = { Text("Hex") },
                     modifier = Modifier.width(120.dp),
                     singleLine = true,
+                    isError = writeError,
                 )
                 OutlinedButton(
                     onClick = {
@@ -380,13 +364,14 @@ private fun CharacteristicRow(characteristic: Characteristic, vm: BleViewModel) 
                             val bytes = writeInput.hexToByteArray()
                             val type = if (props.write) WriteType.WithResponse else WriteType.WithoutResponse
                             vm.writeCharacteristic(characteristic, bytes, type)
-                        } catch (_: Exception) { }
+                        } catch (_: IllegalArgumentException) {
+                            writeError = true
+                        }
                     },
                 ) { Text("Write") }
             }
         }
 
-        // Observe
         if (props.notify || props.indicate) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -395,19 +380,7 @@ private fun CharacteristicRow(characteristic: Characteristic, vm: BleViewModel) 
                 Text("Observe", style = MaterialTheme.typography.bodySmall)
                 Switch(
                     checked = isObserving,
-                    onCheckedChange = { enabled ->
-                        isObserving = enabled
-                        if (enabled) {
-                            scope.launch {
-                                vm.observe(characteristic).collect { observation ->
-                                    observedValue = when (observation) {
-                                        is Observation.Value -> observation.data.toHexString()
-                                        is Observation.Disconnected -> "Disconnected"
-                                    }
-                                }
-                            }
-                        }
-                    },
+                    onCheckedChange = { isObserving = it },
                 )
                 observedValue?.let {
                     Text(text = it, style = MaterialTheme.typography.bodySmall)
@@ -528,7 +501,6 @@ private fun BenchmarkSection(
 
             Spacer(Modifier.height(8.dp))
 
-            // Find the first readable characteristic for benchmarking
             val readableChar = services?.flatMap { it.characteristics }
                 ?.firstOrNull { it.properties.read }
 
