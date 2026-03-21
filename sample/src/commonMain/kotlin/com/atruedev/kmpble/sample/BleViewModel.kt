@@ -2,6 +2,13 @@ package com.atruedev.kmpble.sample
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.atruedev.kmpble.ExperimentalBleApi
+import com.atruedev.kmpble.benchmark.LatencyTracker
+import com.atruedev.kmpble.benchmark.ThroughputMeter
+import com.atruedev.kmpble.benchmark.bleStopwatch
+import com.atruedev.kmpble.bonding.PairingEvent
+import com.atruedev.kmpble.bonding.PairingHandler
+import com.atruedev.kmpble.bonding.PairingResponse
 import com.atruedev.kmpble.connection.ConnectionOptions
 import com.atruedev.kmpble.connection.State
 import com.atruedev.kmpble.gatt.BackpressureStrategy
@@ -16,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
  * Lifecycle-scoped peripheral management.
@@ -46,6 +54,71 @@ class BleViewModel(advertisement: Advertisement) : ViewModel() {
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
+
+    // --- Pairing Handler ---
+    // Pending pairing event waiting for user response
+    private val _pairingEvent = MutableStateFlow<PairingEvent?>(null)
+    val pairingEvent: StateFlow<PairingEvent?> = _pairingEvent.asStateFlow()
+
+    // Continuation for pairing response
+    private var pairingContinuation: ((PairingResponse) -> Unit)? = null
+
+    @OptIn(ExperimentalBleApi::class)
+    val pairingHandler = PairingHandler { event ->
+        _pairingEvent.value = event
+        suspendCancellableCoroutine { cont ->
+            pairingContinuation = { response ->
+                _pairingEvent.value = null
+                pairingContinuation = null
+                cont.resumeWith(Result.success(response))
+            }
+        }
+    }
+
+    fun respondToPairing(response: PairingResponse) {
+        pairingContinuation?.invoke(response)
+    }
+
+    // --- Benchmark ---
+    private val _benchmarkResult = MutableStateFlow<String?>(null)
+    val benchmarkResult: StateFlow<String?> = _benchmarkResult.asStateFlow()
+
+    @OptIn(ExperimentalBleApi::class)
+    fun benchmarkConnect(options: ConnectionOptions) {
+        viewModelScope.launch {
+            try {
+                _benchmarkResult.value = "Benchmarking connect..."
+                peripheral.disconnect()
+                val result = bleStopwatch("connect") { peripheral.connect(options) }
+                _benchmarkResult.value = "Connect: ${result.duration}"
+            } catch (e: Exception) {
+                _benchmarkResult.value = "Error: ${formatError(e)}"
+            }
+        }
+    }
+
+    @OptIn(ExperimentalBleApi::class)
+    fun benchmarkReads(characteristic: Characteristic, count: Int = 10) {
+        viewModelScope.launch {
+            try {
+                _benchmarkResult.value = "Reading $count times..."
+                val meter = ThroughputMeter()
+                val latency = LatencyTracker()
+                meter.start()
+                repeat(count) {
+                    latency.measure {
+                        val data = peripheral.read(characteristic)
+                        meter.record(data.size)
+                    }
+                }
+                val throughput = meter.stop("reads")
+                val stats = latency.summarize("read latency")
+                _benchmarkResult.value = "$throughput\n$stats"
+            } catch (e: Exception) {
+                _benchmarkResult.value = "Error: ${formatError(e)}"
+            }
+        }
+    }
 
     fun connect(options: ConnectionOptions = ConnectionOptions()) {
         viewModelScope.launch {

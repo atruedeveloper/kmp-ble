@@ -17,16 +17,20 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -38,39 +42,62 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun ScannerScreen(onDeviceSelected: (Advertisement) -> Unit) {
+fun ScannerScreen(
+    onDeviceSelected: (Advertisement) -> Unit,
+    onServerTapped: () -> Unit = {},
+) {
     val devices = remember { mutableStateMapOf<Identifier, Advertisement>() }
     val scope = rememberCoroutineScope()
 
-    // Create a scanner with the filter DSL — FirstThenChanges deduplicates and
-    // only emits updates when RSSI changes significantly.
-    val scanner = remember {
-        Scanner {
-            emission = EmissionPolicy.FirstThenChanges(rssiThreshold = 5)
-        }
-    }
+    // Toggle between legacy-only and extended (BLE 5.0) scanning
+    var legacyOnly by remember { mutableStateOf(true) }
 
-    // Start scanning and close scanner on dispose
-    DisposableEffect(scanner) {
-        val scanJob = scope.launch {
+    // (Re)start scanning when legacyOnly changes
+    DisposableEffect(legacyOnly) {
+        devices.clear()
+        val scanner = Scanner {
+            emission = EmissionPolicy.FirstThenChanges(rssiThreshold = 5)
+            this.legacyOnly = legacyOnly
+        }
+        val job = scope.launch {
             scanner.advertisements.collect { advertisement ->
                 devices[advertisement.identifier] = advertisement
             }
         }
         onDispose {
-            scanJob.cancel()
+            job.cancel()
             scanner.close()
         }
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("kmp-ble Scanner") })
+            TopAppBar(
+                title = { Text("kmp-ble Scanner") },
+                actions = {
+                    TextButton(onClick = onServerTapped) {
+                        Text("Server")
+                    }
+                },
+            )
         },
     ) { padding ->
         Column(
             modifier = Modifier.fillMaxSize().padding(padding),
         ) {
+            // BLE 5.0 extended advertising toggle
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Extended Ads (BLE 5.0)", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.width(8.dp))
+                Switch(
+                    checked = !legacyOnly,
+                    onCheckedChange = { legacyOnly = !it },
+                )
+            }
+
             if (devices.isEmpty()) {
                 Column(
                     modifier = Modifier.fillMaxSize(),
@@ -144,6 +171,18 @@ private fun DeviceCard(advertisement: Advertisement, onClick: () -> Unit) {
                         )
                     }
                 }
+            }
+
+            // BLE 5.0 extended advertisement fields
+            if (!advertisement.isLegacy) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Extended | PHY: ${advertisement.primaryPhy}" +
+                        (advertisement.secondaryPhy?.let { " / $it" } ?: "") +
+                        (advertisement.advertisingSid?.let { " | SID: $it" } ?: ""),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
             }
 
             if (!advertisement.isConnectable) {
