@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlin.uuid.toJavaUuid
 
@@ -111,19 +112,16 @@ internal class AndroidExtendedAdvertiser(private val context: Context) : Extende
     }
 
     override fun close() {
-        val advertiser = try { getLeAdvertiser() } catch (_: Exception) { null }
-        // Scope runs on serialDispatcher — cancel serializes with any in-flight operations.
-        // Snapshot before cancelling since scope.launch won't execute after cancel.
-        val snapshot = advertisingSets.toMap()
-        for ((id, handle) in snapshot) {
-            try {
-                advertiser?.stopAdvertisingSet(handle.callback)
-            } catch (_: SecurityException) {
-                // Best-effort stop
+        runBlocking(serialDispatcher) {
+            val advertiser = try { getLeAdvertiser() } catch (_: Exception) { null }
+            for ((_, handle) in advertisingSets) {
+                try {
+                    advertiser?.stopAdvertisingSet(handle.callback)
+                } catch (_: SecurityException) { }
             }
+            advertisingSets.clear()
+            _activeSets.value = emptySet()
         }
-        advertisingSets.clear()
-        _activeSets.value = emptySet()
         scope.cancel()
     }
 

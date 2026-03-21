@@ -95,7 +95,7 @@ internal class AndroidBondManager(
     private fun registerReceiver() {
         if (receiver != null) return
 
-        val br = object : BroadcastReceiver() {
+        val bondReceiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
                 if (intent.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
 
@@ -133,10 +133,10 @@ internal class AndroidBondManager(
             }
         }
 
-        receiver = br
+        receiver = bondReceiver
         val filter = IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         androidx.core.content.ContextCompat.registerReceiver(
-            context, br, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+            context, bondReceiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
         )
     }
 

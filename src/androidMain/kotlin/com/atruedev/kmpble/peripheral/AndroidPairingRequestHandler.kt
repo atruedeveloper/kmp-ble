@@ -15,32 +15,34 @@ import com.atruedev.kmpble.bonding.PairingHandler
 import com.atruedev.kmpble.bonding.PairingResponse
 import com.atruedev.kmpble.logging.BleLogEvent
 import com.atruedev.kmpble.logging.logEvent
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Intercepts [BluetoothDevice.ACTION_PAIRING_REQUEST] broadcasts and delegates
  * to a [PairingHandler] for programmatic pairing responses.
  *
- * All mutable state is confined to the serial [scope] dispatcher
- * (inherited from [PeripheralContext][com.atruedev.kmpble.peripheral.internal.PeripheralContext]).
+ * All mutable state is confined to [serialDispatcher] (`limitedParallelism(1)`
+ * inherited from [PeripheralContext][com.atruedev.kmpble.peripheral.internal.PeripheralContext]).
  */
 @ExperimentalBleApi
 internal class AndroidPairingRequestHandler(
     private val device: BluetoothDevice,
     private val context: Context,
     private val scope: CoroutineScope,
+    private val serialDispatcher: CoroutineDispatcher,
 ) {
-    @Volatile
     private var handler: PairingHandler? = null
     private var receiver: BroadcastReceiver? = null
 
-    fun setHandler(pairingHandler: PairingHandler?) {
+    suspend fun setHandler(pairingHandler: PairingHandler?): Unit = withContext(serialDispatcher) {
         handler = pairingHandler
     }
 
-    fun start() {
-        if (receiver != null) return
+    suspend fun start(): Unit = withContext(serialDispatcher) {
+        if (receiver != null) return@withContext
 
         val br = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
@@ -87,7 +89,19 @@ internal class AndroidPairingRequestHandler(
         )
     }
 
-    fun stop() {
+    suspend fun stop(): Unit = withContext(serialDispatcher) {
+        unregisterReceiver()
+    }
+
+    /**
+     * Synchronous teardown for use in [AutoCloseable.close] where
+     * the coroutine scope is about to be cancelled.
+     */
+    fun closeSync() {
+        unregisterReceiver()
+    }
+
+    private fun unregisterReceiver() {
         receiver?.let {
             context.unregisterReceiver(it)
             receiver = null

@@ -13,8 +13,7 @@ class BenchmarkTest {
 
     @Test
     fun stopwatchMeasuresDuration() = runTest {
-        val stopwatch = BleStopwatch()
-        val result = stopwatch.measure("test-op") { 42 }
+        val result = bleStopwatch("test-op") { 42 }
         assertEquals("test-op", result.label)
         assertEquals(42, result.value)
         assertTrue(result.duration >= 0.milliseconds)

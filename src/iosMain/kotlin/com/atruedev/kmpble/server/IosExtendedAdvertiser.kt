@@ -5,11 +5,15 @@ import com.atruedev.kmpble.internal.IosPeripheralManagerDelegate
 import com.atruedev.kmpble.internal.PeripheralManagerProvider
 import com.atruedev.kmpble.logging.BleLogEvent
 import com.atruedev.kmpble.logging.logEvent
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import platform.CoreBluetooth.CBAdvertisementDataLocalNameKey
 import platform.CoreBluetooth.CBAdvertisementDataServiceUUIDsKey
@@ -37,6 +41,7 @@ internal class IosExtendedAdvertiser(
 ) : ExtendedAdvertiser {
 
     private val serialDispatcher = Dispatchers.Default.limitedParallelism(1)
+    private val scope = CoroutineScope(SupervisorJob() + serialDispatcher)
 
     private val _activeSets = MutableStateFlow<Set<Int>>(emptySet())
     override val activeSets: StateFlow<Set<Int>> = _activeSets.asStateFlow()
@@ -88,8 +93,6 @@ internal class IosExtendedAdvertiser(
     }
 
     override fun close() {
-        // close() is synchronous (AutoCloseable contract). Guard with isClosed flag;
-        // CBPeripheralManager calls are main-thread-safe on iOS.
         if (isClosed) return
         isClosed = true
         if (_activeSets.value.isNotEmpty()) {
@@ -97,14 +100,17 @@ internal class IosExtendedAdvertiser(
             _activeSets.value = emptySet()
         }
         delegate.onStartAdvertising = null
+        scope.cancel()
     }
 
     private fun handleDidStartAdvertising(setId: Int, error: NSError?) {
-        if (error != null) {
-            _activeSets.update { it - setId }
-            logEvent(BleLogEvent.Error(null, "Extended advertising failed: ${error.localizedDescription}", null))
-        } else {
-            logEvent(BleLogEvent.ServerLifecycle("extended advertising set $setId started"))
+        scope.launch {
+            if (error != null) {
+                _activeSets.update { it - setId }
+                logEvent(BleLogEvent.Error(null, "Extended advertising failed: ${error.localizedDescription}", null))
+            } else {
+                logEvent(BleLogEvent.ServerLifecycle("extended advertising set $setId started"))
+            }
         }
     }
 
