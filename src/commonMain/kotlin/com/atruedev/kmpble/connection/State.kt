@@ -4,6 +4,9 @@ import com.atruedev.kmpble.error.BleError
 
 public sealed interface State {
 
+    /** Stable display name for logging. Derived from class name with K/N null fallback. */
+    public val displayName: String get() = this::class.simpleName ?: "Unknown"
+
     public sealed interface Connecting : State {
         public data object Transport : Connecting
         public data object Authenticating : Connecting

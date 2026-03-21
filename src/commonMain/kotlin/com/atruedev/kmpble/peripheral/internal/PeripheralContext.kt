@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlin.concurrent.Volatile
+import kotlin.time.Duration
+import kotlin.time.TimeSource
 
 internal class PeripheralContext(val identifier: Identifier) {
 
@@ -46,8 +48,17 @@ internal class PeripheralContext(val identifier: Identifier) {
     private var closed = false
 
     /**
+     * Tracks when the current state was entered, for connection timeline logging.
+     * Confined to [dispatcher] — only read/written inside [processEvent].
+     */
+    private var stateEnteredAt: TimeSource.Monotonic.ValueTimeMark? = null
+
+    /**
      * Process a state machine event. Always runs on the peripheral's serialized dispatcher.
      * Returns the new state. Invalid transitions are logged and ignored (no crash).
+     *
+     * Logs [BleLogEvent.StateTransition] with the duration spent in the previous state,
+     * enabling connection timeline analysis.
      */
     suspend fun processEvent(event: ConnectionEvent): State = withContext(dispatcher) {
         check(!closed) { "PeripheralContext is closed" }
@@ -58,8 +69,19 @@ internal class PeripheralContext(val identifier: Identifier) {
             return@withContext previousState
         }
 
+        val now = TimeSource.Monotonic.markNow()
+        val durationInPrevious = stateEnteredAt?.let { now - it } ?: Duration.ZERO
+        stateEnteredAt = now
+
         _state.value = result.newState
-        logEvent(BleLogEvent.StateTransition(identifier, from = previousState, to = result.newState))
+        logEvent(
+            BleLogEvent.StateTransition(
+                identifier = identifier,
+                from = previousState,
+                to = result.newState,
+                durationInPreviousState = durationInPrevious,
+            )
+        )
 
         if (result.newState is State.Disconnected) {
             gattQueue.drain()
@@ -81,10 +103,7 @@ internal class PeripheralContext(val identifier: Identifier) {
         _maximumWriteValueLength.value = (mtu - ATT_HEADER_SIZE).coerceAtLeast(DEFAULT_ATT_MTU - ATT_HEADER_SIZE)
     }
 
-    /**
-     * Terminal — release all resources. Non-suspend so Peripheral.close() can be synchronous
-     * (required for ViewModel.onCleared(), deinit, use {} blocks).
-     */
+    /** Terminal — non-suspend for ViewModel.onCleared() / deinit. Idempotent. */
     fun close() {
         if (closed) return
         closed = true
