@@ -11,7 +11,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.atruedev.kmpble.ExperimentalBleApi
 import com.atruedev.kmpble.adapter.BluetoothAdapter
+import com.atruedev.kmpble.connection.StateRestorationConfig
+import com.atruedev.kmpble.connection.enableStateRestoration
 import com.atruedev.kmpble.logging.BleLogConfig
 import com.atruedev.kmpble.logging.PrintBleLogger
 import com.atruedev.kmpble.scanner.Advertisement
@@ -19,12 +22,21 @@ import com.atruedev.kmpble.scanner.Advertisement
 sealed interface Screen {
     data object Scanner : Screen
     data class DeviceDetail(val advertisement: Advertisement) : Screen
+    data object Server : Screen
 }
 
+@OptIn(ExperimentalBleApi::class)
 @Composable
 fun App() {
     // Wire up structured logging to console
-    LaunchedEffect(Unit) { BleLogConfig.logger = PrintBleLogger() }
+    LaunchedEffect(Unit) {
+        BleLogConfig.logger = PrintBleLogger()
+
+        // Enable iOS Core Bluetooth state restoration.
+        // On Android this is a no-op. On iOS, this allows the system to restore
+        // BLE connections after the app is terminated in the background.
+        enableStateRestoration(StateRestorationConfig(identifier = "com.atruedev.kmpble.sample"))
+    }
 
     val adapter = remember { BluetoothAdapter() }
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Scanner) }
@@ -38,9 +50,13 @@ fun App() {
                     when (val screen = currentScreen) {
                         Screen.Scanner -> ScannerScreen(
                             onDeviceSelected = { currentScreen = Screen.DeviceDetail(it) },
+                            onServerTapped = { currentScreen = Screen.Server },
                         )
                         is Screen.DeviceDetail -> DeviceDetailScreen(
                             advertisement = screen.advertisement,
+                            onBack = { currentScreen = Screen.Scanner },
+                        )
+                        Screen.Server -> ServerScreen(
                             onBack = { currentScreen = Screen.Scanner },
                         )
                     }
