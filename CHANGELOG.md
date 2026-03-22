@@ -15,6 +15,21 @@ _Changes on `main` that have not yet been tagged for release._
 
 ---
 
+## [0.3.0] - 2026-03-22
+
+### Added
+- feat: add format-agnostic codec module (kmp-ble-codec) (#48)
+- feat: add kmp-ble-dfu module with Nordic Secure DFU v2 (#47)
+- feat: add kmp-ble-profiles module with type-safe GATT profile parsing (#46)
+
+### Other
+- update Package.swift for v0.3.0
+- ci(dependabot): bump actions/github-script from 7.0.1 to 8.0.0 (#45)
+- update Package.swift for v0.2.2
+
+
+---
+
 ## [0.2.2] - 2026-03-22
 
 ### Fixed
@@ -186,7 +201,8 @@ _Changes on `main` that have not yet been tagged for release._
 
 ---
 
-[Unreleased]: https://github.com/atruedeveloper/kmp-ble/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/atruedeveloper/kmp-ble/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/atruedeveloper/kmp-ble/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/atruedeveloper/kmp-ble/compare/v0.2.1...v0.2.2
 [0.1.10]: https://github.com/atruedeveloper/kmp-ble/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/atruedeveloper/kmp-ble/compare/v0.1.8-alpha2...v0.1.9
