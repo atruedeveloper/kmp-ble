@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.uuid.ExperimentalUuidApi
 
@@ -33,6 +34,24 @@ class PeripheralCodecTest {
     }
 
     @Test
+    fun readPropagatesDecoderFailure() = runTest {
+        val peripheral = FakePeripheral {
+            service("180d") {
+                characteristic("2a37") {
+                    properties(read = true)
+                    onRead { byteArrayOf(0xFF.toByte()) }
+                }
+            }
+        }
+        peripheral.connect()
+
+        val char = peripheral.findCharacteristic(uuidFrom("180d"), uuidFrom("2a37"))!!
+        assertFailsWith<IllegalArgumentException> {
+            peripheral.read(char, FailingDecoder)
+        }
+    }
+
+    @Test
     fun writeEncodesValue() = runTest {
         var writtenData: ByteArray? = null
 
@@ -49,6 +68,24 @@ class PeripheralCodecTest {
         val char = peripheral.findCharacteristic(uuidFrom("180d"), uuidFrom("2a39"))!!
         peripheral.write(char, "hello", TestStringEncoder)
         assertContentEquals("hello".encodeToByteArray(), writtenData)
+    }
+
+    @Test
+    fun writePropagatesEncoderFailure() = runTest {
+        val peripheral = FakePeripheral {
+            service("180d") {
+                characteristic("2a39") {
+                    properties(write = true)
+                    onWrite { _, _ -> }
+                }
+            }
+        }
+        peripheral.connect()
+
+        val char = peripheral.findCharacteristic(uuidFrom("180d"), uuidFrom("2a39"))!!
+        assertFailsWith<IllegalArgumentException> {
+            peripheral.write(char, "x", FailingEncoder)
+        }
     }
 
     @Test
@@ -112,7 +149,27 @@ class PeripheralCodecTest {
     }
 
     @Test
-    fun observeDecodesValuesAndPreservesDisconnects() = runTest {
+    fun observeValuesDecoderFailureCancelsFlow() = runTest {
+        val peripheral = FakePeripheral {
+            service("180d") {
+                characteristic("2a37") {
+                    properties(notify = true)
+                    onObserve {
+                        flow { emit(byteArrayOf(0xFF.toByte())) }
+                    }
+                }
+            }
+        }
+        peripheral.connect()
+
+        val char = peripheral.findCharacteristic(uuidFrom("180d"), uuidFrom("2a37"))!!
+        assertFailsWith<IllegalArgumentException> {
+            peripheral.observeValues(char, FailingDecoder, BackpressureStrategy.Unbounded).toList()
+        }
+    }
+
+    @Test
+    fun observeDecodesValues() = runTest {
         val peripheral = FakePeripheral {
             service("180d") {
                 characteristic("2a37") {

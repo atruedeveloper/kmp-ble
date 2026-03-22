@@ -71,6 +71,8 @@ class BleCodecTest {
         assertContentEquals(byteArrayOf(0x03, 0xE9.toByte()), encoder.encode(501))
     }
 
+    // ── BleDataDecoder ──
+
     @Test
     fun bleDataDecoderReadsFromBleData() {
         assertEquals(0x0148, TestIntBleDataDecoder.decode(BleData(byteArrayOf(0x01, 0x48))))
@@ -94,6 +96,32 @@ class BleCodecTest {
         assertEquals(2001, decoder.decode(BleData(byteArrayOf(0x03, 0xE8.toByte()))))
     }
 
+    // ── BleDataEncoder ──
+
+    @Test
+    fun bleDataEncoderProducesBleData() {
+        val result = TestIntBleDataEncoder.encode(0x0148)
+        assertEquals(0x01, result[0])
+        assertEquals(0x48, result[1])
+    }
+
+    @Test
+    fun bleDataEncoderLambdaConstruction() {
+        val encoder: BleDataEncoder<String> = BleDataEncoder { BleData(it.encodeToByteArray()) }
+        val result = encoder.encode("hi")
+        assertContentEquals("hi".encodeToByteArray(), result.toByteArray())
+    }
+
+    @Test
+    fun bleDataEncoderContramap() {
+        val stringEncoder = TestIntBleDataEncoder.contramap<String, Int> { it.toInt() }
+        val result = stringEncoder.encode("1000")
+        assertEquals(0x03, result[0])
+        assertEquals(0xE8.toByte(), result[1])
+    }
+
+    // ── Bridging ──
+
     @Test
     fun bleDecoderAsBleDataDecoder() {
         val bridged = TestIntDecoder.asBleDataDecoder()
@@ -107,9 +135,53 @@ class BleCodecTest {
     }
 
     @Test
-    fun bridgingRoundTripPreservesValue() {
+    fun bleEncoderAsBleDataEncoder() {
+        val bridged = TestIntEncoder.asBleDataEncoder()
+        val result = bridged.encode(0x0148)
+        assertEquals(0x01, result[0])
+        assertEquals(0x48, result[1])
+    }
+
+    @Test
+    fun bleDataEncoderAsBleEncoder() {
+        val bridged = TestIntBleDataEncoder.asBleEncoder()
+        assertContentEquals(byteArrayOf(0x01, 0x48), bridged.encode(0x0148))
+    }
+
+    @Test
+    fun decoderBridgingRoundTripPreservesValue() {
         val roundTripped = TestIntBleDataDecoder.asBleDecoder().asBleDataDecoder()
         val bleData = BleData(byteArrayOf(0x03, 0xE8.toByte()))
         assertEquals(TestIntBleDataDecoder.decode(bleData), roundTripped.decode(bleData))
+    }
+
+    @Test
+    fun encoderBridgingRoundTripPreservesValue() {
+        val roundTripped = TestIntBleDataEncoder.asBleEncoder().asBleDataEncoder()
+        val original = TestIntBleDataEncoder.encode(1000)
+        val bridged = roundTripped.encode(1000)
+        assertEquals(original.toByteArray().toList(), bridged.toByteArray().toList())
+    }
+
+    // ── DecodedObservation.fold ──
+
+    @Test
+    fun foldOnValueReturnsTransformedValue() {
+        val obs: DecodedObservation<Int> = DecodedObservation.Value(42)
+        val result = obs.fold(
+            onValue = { "got $it" },
+            onDisconnected = { "disconnected" },
+        )
+        assertEquals("got 42", result)
+    }
+
+    @Test
+    fun foldOnDisconnectedReturnsDisconnectedResult() {
+        val obs: DecodedObservation<Int> = DecodedObservation.Disconnected
+        val result = obs.fold(
+            onValue = { "got $it" },
+            onDisconnected = { "disconnected" },
+        )
+        assertEquals("disconnected", result)
     }
 }

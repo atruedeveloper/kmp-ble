@@ -21,6 +21,17 @@ public fun interface BleDecoder<out T> {
 public interface BleCodec<T> : BleEncoder<T>, BleDecoder<T>
 
 /**
+ * Encodes a value of type [T] directly into [BleData].
+ *
+ * Use for server-side operations ([GattServer.notify], [GattServer.indicate])
+ * where [BleData] is the native currency, avoiding the intermediate
+ * `ByteArray` allocation that [BleEncoder] would require.
+ */
+public fun interface BleDataEncoder<in T> {
+    public fun encode(value: T): BleData
+}
+
+/**
  * Decodes a [BleData] into a value of type [T] without copying.
  *
  * On iOS, [BleData] wraps `NSData` from CoreBluetooth with zero-copy.
@@ -62,12 +73,16 @@ public fun <A, B> BleCodec<A>.bimap(
     decode: (A) -> B,
 ): BleCodec<B> = bleCodec(
     encoder = contramap(encode),
-    decoder = (this as BleDecoder<A>).map(decode),
+    decoder = map(decode),
 )
 
 /** Transform the output of this BleData decoder. */
 public fun <A, B> BleDataDecoder<A>.map(transform: (A) -> B): BleDataDecoder<B> =
     BleDataDecoder { data -> transform(decode(data)) }
+
+/** Transform the input of this BleData encoder. */
+public fun <A, B> BleDataEncoder<B>.contramap(transform: (A) -> B): BleDataEncoder<A> =
+    BleDataEncoder { value -> encode(transform(value)) }
 
 /**
  * Bridge a [BleDecoder] to work with [BleData] input.
@@ -81,3 +96,11 @@ public fun <T> BleDecoder<T>.asBleDataDecoder(): BleDataDecoder<T> =
 /** Bridge a [BleDataDecoder] to work with [ByteArray] input. */
 public fun <T> BleDataDecoder<T>.asBleDecoder(): BleDecoder<T> =
     BleDecoder { bytes -> decode(BleData(bytes)) }
+
+/** Bridge a [BleEncoder] to produce [BleData] via [BleData] factory. */
+public fun <T> BleEncoder<T>.asBleDataEncoder(): BleDataEncoder<T> =
+    BleDataEncoder { value -> BleData(encode(value)) }
+
+/** Bridge a [BleDataEncoder] to produce [ByteArray] via [BleData.toByteArray]. */
+public fun <T> BleDataEncoder<T>.asBleEncoder(): BleEncoder<T> =
+    BleEncoder { value -> encode(value).toByteArray() }

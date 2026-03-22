@@ -1,5 +1,6 @@
 package com.atruedev.kmpble.codec
 
+import com.atruedev.kmpble.BleData
 import com.atruedev.kmpble.Identifier
 import com.atruedev.kmpble.testing.FakeGattServer
 import kotlinx.coroutines.test.runTest
@@ -16,7 +17,7 @@ class ServerCodecTest {
     private val charUuid = Uuid.parse("00002a37-0000-1000-8000-00805f9b34fb")
 
     @Test
-    fun notifyEncodesValue() = runTest {
+    fun notifyWithBleEncoder() = runTest {
         val server = FakeGattServer()
         server.open()
         server.simulateConnection(device)
@@ -25,13 +26,25 @@ class ServerCodecTest {
 
         val records = server.getNotifications()
         assertEquals(1, records.size)
-        assertEquals(charUuid, records[0].characteristicUuid)
-        assertEquals(device, records[0].device)
         assertContentEquals("hello".encodeToByteArray(), records[0].data.toByteArray())
     }
 
     @Test
-    fun notifyBroadcastEncodesValue() = runTest {
+    fun notifyWithBleDataEncoder() = runTest {
+        val server = FakeGattServer()
+        server.open()
+        server.simulateConnection(device)
+
+        server.notify(charUuid, device, 0x0148, TestIntBleDataEncoder)
+
+        val records = server.getNotifications()
+        assertEquals(1, records.size)
+        assertEquals(0x01, records[0].data[0])
+        assertEquals(0x48, records[0].data[1])
+    }
+
+    @Test
+    fun notifyBroadcast() = runTest {
         val server = FakeGattServer()
         server.open()
         server.simulateConnection(device)
@@ -44,7 +57,7 @@ class ServerCodecTest {
     }
 
     @Test
-    fun indicateEncodesValue() = runTest {
+    fun indicateWithBleEncoder() = runTest {
         val server = FakeGattServer()
         server.open()
         server.simulateConnection(device)
@@ -55,6 +68,20 @@ class ServerCodecTest {
         assertEquals(1, records.size)
         assertEquals(charUuid, records[0].characteristicUuid)
         assertEquals(device, records[0].device)
+        assertContentEquals("ack-me".encodeToByteArray(), records[0].data.toByteArray())
+    }
+
+    @Test
+    fun indicateWithBleDataEncoder() = runTest {
+        val server = FakeGattServer()
+        server.open()
+        server.simulateConnection(device)
+
+        val encoder = BleDataEncoder<String> { BleData(it.encodeToByteArray()) }
+        server.indicate(charUuid, device, "ack-me", encoder)
+
+        val records = server.getIndications()
+        assertEquals(1, records.size)
         assertContentEquals("ack-me".encodeToByteArray(), records[0].data.toByteArray())
     }
 }

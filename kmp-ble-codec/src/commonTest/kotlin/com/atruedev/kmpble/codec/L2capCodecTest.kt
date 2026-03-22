@@ -9,6 +9,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 
 class L2capCodecTest {
 
@@ -52,5 +53,24 @@ class L2capCodecTest {
         assertContentEquals("one".encodeToByteArray(), written[0])
         assertContentEquals("two".encodeToByteArray(), written[1])
         assertContentEquals("three".encodeToByteArray(), written[2])
+    }
+
+    @Test
+    fun incomingDecoderFailurePropagates() = runTest {
+        val channel = FakeL2capChannel(psm = 0x25)
+        var caughtException: Throwable? = null
+
+        val job = launch(UnconfinedTestDispatcher(testScheduler)) {
+            try {
+                channel.incoming(FailingDecoder).collect {}
+            } catch (e: IllegalArgumentException) {
+                caughtException = e
+            }
+        }
+
+        channel.emitIncoming(byteArrayOf(0x01))
+
+        assertIs<IllegalArgumentException>(caughtException)
+        job.cancel()
     }
 }
