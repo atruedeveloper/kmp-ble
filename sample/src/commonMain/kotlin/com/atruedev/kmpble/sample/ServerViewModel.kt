@@ -81,11 +81,11 @@ class ServerViewModel : ViewModel() {
     }
 
     fun stopLegacyAdvertising() {
-        advertiser.stopAdvertising()
+        launchWithErrorHandling { advertiser.stopAdvertising() }
     }
 
     fun startLegacyAdvertising() {
-        try {
+        launchWithErrorHandling {
             advertiser.startAdvertising(
                 AdvertiseConfig(
                     name = "kmp-ble Sample",
@@ -93,8 +93,6 @@ class ServerViewModel : ViewModel() {
                     connectable = true,
                 ),
             )
-        } catch (e: Exception) {
-            _error.value = e.message ?: "Unknown error"
         }
     }
 

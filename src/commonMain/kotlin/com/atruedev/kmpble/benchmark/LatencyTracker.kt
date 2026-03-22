@@ -54,9 +54,10 @@ public class LatencyTracker(
     }
 }
 
+// Nearest-rank percentile (C=0 interpolation) on a pre-sorted list.
 private fun List<Duration>.percentile(p: Int): Duration {
     if (isEmpty()) return Duration.ZERO
-    val index = kotlin.math.ceil((p / 100.0) * size).toInt().coerceIn(1, size) - 1
+    val index = ((p / 100.0) * (size - 1)).toInt().coerceIn(0, size - 1)
     return this[index]
 }
 
