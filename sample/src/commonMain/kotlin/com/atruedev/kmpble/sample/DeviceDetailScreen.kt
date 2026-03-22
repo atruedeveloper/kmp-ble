@@ -1,5 +1,7 @@
 package com.atruedev.kmpble.sample
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -12,13 +14,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -31,36 +31,37 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.atruedev.kmpble.ExperimentalBleApi
 import com.atruedev.kmpble.bonding.BondState
+import com.atruedev.kmpble.bonding.PairingEvent
+import com.atruedev.kmpble.bonding.PairingResponse
 import com.atruedev.kmpble.connection.BondingPreference
 import com.atruedev.kmpble.connection.ConnectionOptions
+import com.atruedev.kmpble.connection.ConnectionRecipe
 import com.atruedev.kmpble.connection.ReconnectionStrategy
 import com.atruedev.kmpble.connection.State
-import com.atruedev.kmpble.gatt.Characteristic
-import com.atruedev.kmpble.gatt.DiscoveredService
-import com.atruedev.kmpble.gatt.Observation
-import com.atruedev.kmpble.gatt.WriteType
+import com.atruedev.kmpble.ServiceUuid
 import com.atruedev.kmpble.scanner.Advertisement
-import kotlinx.coroutines.launch
+import kotlin.uuid.ExperimentalUuidApi
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalBleApi::class, ExperimentalUuidApi::class)
 @Composable
 fun DeviceDetailScreen(
     advertisement: Advertisement,
     onBack: () -> Unit,
+    onExploreServices: () -> Unit,
+    onHeartRateDemo: () -> Unit,
 ) {
-    // ViewModel is scoped to this composable's lifecycle.
-    // When navigating back, onCleared() fires → peripheral.close().
     val vm = viewModel { BleViewModel(advertisement) }
 
     val state by vm.connectionState.collectAsState()
@@ -70,15 +71,21 @@ fun DeviceDetailScreen(
     val mtu by vm.mtu.collectAsState()
     val maxWriteLen by vm.maximumWriteValueLength.collectAsState()
     val error by vm.error.collectAsState()
+    val pairingEvent by vm.pairing.event.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
+    val isConnected = state is State.Connected
+    val hasHeartRate = services?.any { it.uuid == ServiceUuid.HEART_RATE } == true
 
     LaunchedEffect(error) {
         error?.let {
             snackbar.showSnackbar(it)
             vm.clearError()
         }
+    }
+
+    pairingEvent?.let { event ->
+        PairingDialog(event = event, onRespond = { vm.pairing.respond(it) })
     }
 
     Scaffold(
@@ -98,24 +105,40 @@ fun DeviceDetailScreen(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // Connection section
             item { ConnectionSection(state, bond, vm) }
 
-            // Info section
-            item { InfoSection(rssi, mtu, maxWriteLen, vm) }
+            if (isConnected) {
+                item { InfoSection(rssi, mtu, maxWriteLen, vm) }
+            }
 
-            // Services section
-            val serviceList = services
-            if (serviceList != null) {
-                items(serviceList) { service ->
-                    ServiceCard(service, vm)
+            item {
+                AnimatedVisibility(isConnected) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        NavigationCard(
+                            title = "Explore Services",
+                            description = "Browse GATT tree, read/write characteristics, benchmarks, L2CAP",
+                            onClick = onExploreServices,
+                        )
+
+                        if (hasHeartRate) {
+                            NavigationCard(
+                                title = "Heart Rate Monitor",
+                                description = "Live BPM with transparent reconnection",
+                                onClick = onHeartRateDemo,
+                                highlight = true,
+                            )
+                        }
+                    }
                 }
-            } else if (state is State.Connected) {
+            }
+
+            if (!isConnected) {
                 item {
                     Text(
-                        "Discovering services...",
+                        "Connect to explore this device.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 24.dp),
                     )
                 }
             }
@@ -125,19 +148,69 @@ fun DeviceDetailScreen(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun NavigationCard(
+    title: String,
+    description: String,
+    onClick: () -> Unit,
+    highlight: Boolean = false,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        colors = if (highlight) {
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        } else {
+            CardDefaults.cardColors()
+        },
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (highlight) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+    }
+}
+
+@Stable
+@OptIn(ExperimentalBleApi::class)
+private sealed interface RecipeOption {
+    val label: String
+
+    data object Custom : RecipeOption { override val label = "Custom" }
+    data class Preset(override val label: String, val options: ConnectionOptions) : RecipeOption
+
+    companion object {
+        val entries = listOf(
+            Custom,
+            Preset("Medical", ConnectionRecipe.MEDICAL),
+            Preset("Fitness", ConnectionRecipe.FITNESS),
+            Preset("IoT", ConnectionRecipe.IOT),
+            Preset("Consumer", ConnectionRecipe.CONSUMER),
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalBleApi::class)
 @Composable
 private fun ConnectionSection(state: State, bond: BondState, vm: BleViewModel) {
     var autoConnect by remember { mutableStateOf(false) }
     var useReconnection by remember { mutableStateOf(false) }
     var bondingPref by remember { mutableStateOf(BondingPreference.IfRequired) }
+    var selectedRecipe by remember { mutableStateOf<RecipeOption>(RecipeOption.Custom) }
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text("Connection", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(8.dp))
 
-            // State chip
             FilterChip(
                 selected = state is State.Connected,
                 onClick = {},
@@ -146,39 +219,50 @@ private fun ConnectionSection(state: State, bond: BondState, vm: BleViewModel) {
 
             Spacer(Modifier.height(8.dp))
 
-            // Connection options
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("autoConnect", style = MaterialTheme.typography.bodySmall)
-                Spacer(Modifier.width(8.dp))
-                Switch(checked = autoConnect, onCheckedChange = { autoConnect = it })
-            }
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Reconnection", style = MaterialTheme.typography.bodySmall)
-                Spacer(Modifier.width(8.dp))
-                Switch(checked = useReconnection, onCheckedChange = { useReconnection = it })
-            }
-
-            // Bonding preference chips
-            Text("Bonding", style = MaterialTheme.typography.bodySmall)
+            Text("Connection Recipe", style = MaterialTheme.typography.bodySmall)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                for (pref in BondingPreference.entries) {
+                for (recipe in RecipeOption.entries) {
                     FilterChip(
-                        selected = bondingPref == pref,
-                        onClick = { bondingPref = pref },
-                        label = { Text(pref.name, style = MaterialTheme.typography.labelSmall) },
+                        selected = selectedRecipe == recipe,
+                        onClick = { selectedRecipe = recipe },
+                        label = { Text(recipe.label, style = MaterialTheme.typography.labelSmall) },
                     )
+                }
+            }
+
+            if (selectedRecipe is RecipeOption.Custom) {
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("autoConnect", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.width(8.dp))
+                    Switch(checked = autoConnect, onCheckedChange = { autoConnect = it })
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Reconnection", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.width(8.dp))
+                    Switch(checked = useReconnection, onCheckedChange = { useReconnection = it })
+                }
+
+                Text("Bonding", style = MaterialTheme.typography.bodySmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (pref in BondingPreference.entries) {
+                        FilterChip(
+                            selected = bondingPref == pref,
+                            onClick = { bondingPref = pref },
+                            label = { Text(pref.name, style = MaterialTheme.typography.labelSmall) },
+                        )
+                    }
                 }
             }
 
             Spacer(Modifier.height(8.dp))
 
-            // Connect/Disconnect buttons
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = {
-                        vm.connect(
-                            ConnectionOptions(
+                        val baseOptions = when (val recipe = selectedRecipe) {
+                            is RecipeOption.Custom -> ConnectionOptions(
                                 autoConnect = autoConnect,
                                 bondingPreference = bondingPref,
                                 reconnectionStrategy = if (useReconnection) {
@@ -187,7 +271,9 @@ private fun ConnectionSection(state: State, bond: BondState, vm: BleViewModel) {
                                     ReconnectionStrategy.None
                                 },
                             )
-                        )
+                            is RecipeOption.Preset -> recipe.options
+                        }
+                        vm.connect(baseOptions)
                     },
                     enabled = state is State.Disconnected,
                 ) { Text("Connect") }
@@ -198,7 +284,6 @@ private fun ConnectionSection(state: State, bond: BondState, vm: BleViewModel) {
                 ) { Text("Disconnect") }
             }
 
-            // Bond state
             Spacer(Modifier.height(8.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -251,135 +336,63 @@ private fun InfoSection(rssi: Int?, mtu: Int, maxWriteLen: Int, vm: BleViewModel
     }
 }
 
+@OptIn(ExperimentalBleApi::class)
 @Composable
-private fun ServiceCard(service: DiscoveredService, vm: BleViewModel) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun PairingDialog(event: PairingEvent, onRespond: (PairingResponse) -> Unit) {
+    var pinInput by remember { mutableStateOf("") }
+
+    Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "Service: ${service.uuid.toString().take(8)}...",
-                style = MaterialTheme.typography.titleSmall,
-            )
+            Text("Pairing Request", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(8.dp))
 
-            for ((index, char) in service.characteristics.withIndex()) {
-                if (index > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                CharacteristicRow(char, vm)
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun CharacteristicRow(characteristic: Characteristic, vm: BleViewModel) {
-    val props = characteristic.properties
-    var readValue by remember { mutableStateOf<String?>(null) }
-    var writeInput by remember { mutableStateOf("") }
-    var observedValue by remember { mutableStateOf<String?>(null) }
-    var isObserving by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-
-    Column {
-        Text(
-            text = characteristic.uuid.toString().take(8) + "...",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-
-        // Property badges
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (props.read) PropertyBadge("R")
-            if (props.write) PropertyBadge("W")
-            if (props.writeWithoutResponse) PropertyBadge("WnR")
-            if (props.notify) PropertyBadge("N")
-            if (props.indicate) PropertyBadge("I")
-        }
-
-        Spacer(Modifier.height(4.dp))
-
-        // Read
-        if (props.read) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(
-                    onClick = {
-                        vm.readCharacteristic(characteristic) { result ->
-                            readValue = result.fold(
-                                onSuccess = { it.toHexString() },
-                                onFailure = { "Error: ${it.message}" },
-                            )
-                        }
-                    },
-                ) { Text("Read") }
-                readValue?.let {
-                    Text(text = it, style = MaterialTheme.typography.bodySmall)
+            when (event) {
+                is PairingEvent.NumericComparison -> {
+                    Text("Confirm the number matches: ${event.numericValue}")
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { onRespond(PairingResponse.Confirm(true)) }) { Text("Confirm") }
+                        OutlinedButton(onClick = { onRespond(PairingResponse.Confirm(false)) }) { Text("Reject") }
+                    }
                 }
-            }
-        }
-
-        // Write
-        if (props.write || props.writeWithoutResponse) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedTextField(
-                    value = writeInput,
-                    onValueChange = { writeInput = it },
-                    label = { Text("Hex") },
-                    modifier = Modifier.width(120.dp),
-                    singleLine = true,
-                )
-                OutlinedButton(
-                    onClick = {
-                        try {
-                            val bytes = writeInput.hexToByteArray()
-                            val type = if (props.write) WriteType.WithResponse else WriteType.WithoutResponse
-                            vm.writeCharacteristic(characteristic, bytes, type)
-                        } catch (_: Exception) { }
-                    },
-                ) { Text("Write") }
-            }
-        }
-
-        // Observe
-        if (props.notify || props.indicate) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("Observe", style = MaterialTheme.typography.bodySmall)
-                Switch(
-                    checked = isObserving,
-                    onCheckedChange = { enabled ->
-                        isObserving = enabled
-                        if (enabled) {
-                            scope.launch {
-                                vm.observe(characteristic).collect { observation ->
-                                    observedValue = when (observation) {
-                                        is Observation.Value -> observation.data.toHexString()
-                                        is Observation.Disconnected -> "Disconnected"
-                                    }
-                                }
-                            }
-                        }
-                    },
-                )
-                observedValue?.let {
-                    Text(text = it, style = MaterialTheme.typography.bodySmall)
+                is PairingEvent.PasskeyRequest -> {
+                    Text("Enter the passkey:")
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedTextField(
+                        value = pinInput,
+                        onValueChange = { pinInput = it },
+                        label = { Text("PIN") },
+                        singleLine = true,
+                        modifier = Modifier.width(120.dp),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(onClick = { pinInput.toIntOrNull()?.let { onRespond(PairingResponse.ProvidePin(it)) } }) {
+                        Text("Submit")
+                    }
+                }
+                is PairingEvent.PasskeyNotification -> {
+                    Text("Passkey displayed on device: ${event.passkey}")
+                    Spacer(Modifier.height(8.dp))
+                    Button(onClick = { onRespond(PairingResponse.Confirm(true)) }) { Text("OK") }
+                }
+                is PairingEvent.JustWorksConfirmation -> {
+                    Text("Allow pairing with this device?")
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { onRespond(PairingResponse.Confirm(true)) }) { Text("Allow") }
+                        OutlinedButton(onClick = { onRespond(PairingResponse.Confirm(false)) }) { Text("Deny") }
+                    }
+                }
+                is PairingEvent.OutOfBandDataRequest -> {
+                    Text("OOB pairing requested.")
+                    Spacer(Modifier.height(8.dp))
+                    Button(onClick = { onRespond(PairingResponse.ProvideOobData(ByteArray(16))) }) {
+                        Text("Provide OOB Data")
+                    }
                 }
             }
         }
     }
-}
-
-@Composable
-private fun PropertyBadge(label: String) {
-    FilterChip(
-        selected = true,
-        onClick = {},
-        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-    )
 }
 
 private fun stateLabel(state: State): String = when (state) {

@@ -2,6 +2,11 @@ package com.atruedev.kmpble.sample
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.atruedev.kmpble.ExperimentalBleApi
+import com.atruedev.kmpble.benchmark.LatencyTracker
+import com.atruedev.kmpble.benchmark.ThroughputMeter
+import com.atruedev.kmpble.benchmark.bleStopwatch
+import com.atruedev.kmpble.bonding.BondRemovalResult
 import com.atruedev.kmpble.connection.ConnectionOptions
 import com.atruedev.kmpble.connection.State
 import com.atruedev.kmpble.gatt.BackpressureStrategy
@@ -9,6 +14,7 @@ import com.atruedev.kmpble.gatt.Characteristic
 import com.atruedev.kmpble.gatt.Observation
 import com.atruedev.kmpble.gatt.WriteType
 import com.atruedev.kmpble.peripheral.Peripheral
+import com.atruedev.kmpble.peripheral.dump
 import com.atruedev.kmpble.scanner.Advertisement
 import com.atruedev.kmpble.peripheral.toPeripheral
 import kotlinx.coroutines.flow.Flow
@@ -20,14 +26,9 @@ import kotlinx.coroutines.launch
 /**
  * Lifecycle-scoped peripheral management.
  *
- * This is the recommended pattern for using kmp-ble in a Compose app:
- * - The [Peripheral] is created once from the [Advertisement]
- * - All BLE operations are scoped to [viewModelScope]
- * - [onCleared] calls [Peripheral.close], which cancels coroutines and disconnects
- *
- * Without this pattern, GATT connections leak when the screen is removed from
- * the composition. On Android the OS-level connection persists, causing phantom
- * connections that drain battery and block reconnection.
+ * [Peripheral] is created once from the [Advertisement]; all BLE operations
+ * are scoped to [viewModelScope]. [onCleared] calls [Peripheral.close] which
+ * cancels coroutines and disconnects — without this, GATT connections leak.
  */
 class BleViewModel(advertisement: Advertisement) : ViewModel() {
 
@@ -47,25 +48,67 @@ class BleViewModel(advertisement: Advertisement) : ViewModel() {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    fun connect(options: ConnectionOptions = ConnectionOptions()) {
+    val pairing = PairingCoordinator()
+    val l2cap = L2capController(peripheral, viewModelScope)
+
+    private val _benchmarkResult = MutableStateFlow<String?>(null)
+    val benchmarkResult: StateFlow<String?> = _benchmarkResult.asStateFlow()
+
+    fun dump(): String = peripheral.dump()
+
+    fun observeValues(
+        characteristic: Characteristic,
+        backpressure: BackpressureStrategy = BackpressureStrategy.Latest,
+    ): Flow<ByteArray> = peripheral.observeValues(characteristic, backpressure)
+
+    @OptIn(ExperimentalBleApi::class)
+    fun benchmarkConnect(options: ConnectionOptions = ConnectionOptions()) {
         viewModelScope.launch {
             try {
-                _error.value = null
-                peripheral.connect(options)
+                _benchmarkResult.value = "Benchmarking connect..."
+                peripheral.disconnect()
+                val result = bleStopwatch("connect") {
+                    peripheral.connect(options.copy(pairingHandler = pairing.handler))
+                }
+                _benchmarkResult.value = "Connect: ${result.duration}"
             } catch (e: Exception) {
-                _error.value = formatError(e)
+                _benchmarkResult.value = "Error: ${formatError(e)}"
             }
         }
     }
 
-    fun disconnect() {
+    @OptIn(ExperimentalBleApi::class)
+    fun benchmarkReads(characteristic: Characteristic, count: Int = 10) {
         viewModelScope.launch {
             try {
-                peripheral.disconnect()
+                _benchmarkResult.value = "Reading $count times..."
+                val meter = ThroughputMeter()
+                val latency = LatencyTracker()
+                meter.start()
+                repeat(count) {
+                    latency.measure {
+                        val data = peripheral.read(characteristic)
+                        meter.record(data.size)
+                    }
+                }
+                val throughput = meter.stop("reads")
+                val stats = latency.summarize("read latency")
+                _benchmarkResult.value = "$throughput\n$stats"
             } catch (e: Exception) {
-                _error.value = formatError(e)
+                _benchmarkResult.value = "Error: ${formatError(e)}"
             }
         }
+    }
+
+    fun connect(options: ConnectionOptions = ConnectionOptions()) {
+        launchWithErrorHandling {
+            _error.value = null
+            peripheral.connect(options.copy(pairingHandler = pairing.handler))
+        }
+    }
+
+    fun disconnect() {
+        launchWithErrorHandling { peripheral.disconnect() }
     }
 
     fun readCharacteristic(characteristic: Characteristic, onResult: (Result<ByteArray>) -> Unit) {
@@ -79,45 +122,27 @@ class BleViewModel(advertisement: Advertisement) : ViewModel() {
         data: ByteArray,
         writeType: WriteType = WriteType.WithResponse,
     ) {
-        viewModelScope.launch {
-            try {
-                peripheral.write(characteristic, data, writeType)
-            } catch (e: Exception) {
-                _error.value = formatError(e)
-            }
-        }
+        launchWithErrorHandling { peripheral.write(characteristic, data, writeType) }
     }
 
     fun observe(characteristic: Characteristic): Flow<Observation> =
         peripheral.observe(characteristic, BackpressureStrategy.Latest)
 
     fun readRssi() {
-        viewModelScope.launch {
-            try {
-                _rssi.value = peripheral.readRssi()
-            } catch (e: Exception) {
-                _error.value = formatError(e)
-            }
-        }
+        launchWithErrorHandling { _rssi.value = peripheral.readRssi() }
     }
 
     fun requestMtu(mtu: Int) {
-        viewModelScope.launch {
-            try {
-                _mtu.value = peripheral.requestMtu(mtu)
-            } catch (e: Exception) {
-                _error.value = formatError(e)
-            }
-        }
+        launchWithErrorHandling { _mtu.value = peripheral.requestMtu(mtu) }
     }
 
-    @OptIn(com.atruedev.kmpble.ExperimentalBleApi::class)
+    @OptIn(ExperimentalBleApi::class)
     fun removeBond() {
         val result = peripheral.removeBond()
         _error.value = when (result) {
-            is com.atruedev.kmpble.bonding.BondRemovalResult.Success -> null
-            is com.atruedev.kmpble.bonding.BondRemovalResult.NotSupported -> result.message
-            is com.atruedev.kmpble.bonding.BondRemovalResult.Failed -> result.reason
+            is BondRemovalResult.Success -> null
+            is BondRemovalResult.NotSupported -> result.message
+            is BondRemovalResult.Failed -> result.reason
         }
     }
 
@@ -125,13 +150,19 @@ class BleViewModel(advertisement: Advertisement) : ViewModel() {
         _error.value = null
     }
 
-    // Called when the composable hosting this ViewModel leaves the composition.
-    // On Android: when the Activity/Fragment is destroyed (survives config changes).
-    // On iOS: when the compose view is removed.
-    //
-    // This is critical — without it, the GATT connection leaks.
     override fun onCleared() {
+        l2cap.close()
         peripheral.close()
+    }
+
+    private fun launchWithErrorHandling(block: suspend () -> Unit) {
+        viewModelScope.launch {
+            try {
+                block()
+            } catch (e: Exception) {
+                _error.value = formatError(e)
+            }
+        }
     }
 
     private fun formatError(e: Exception): String = e.message ?: "Unknown error"

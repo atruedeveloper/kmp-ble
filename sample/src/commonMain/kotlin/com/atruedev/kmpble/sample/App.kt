@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -19,14 +18,21 @@ import com.atruedev.kmpble.scanner.Advertisement
 sealed interface Screen {
     data object Scanner : Screen
     data class DeviceDetail(val advertisement: Advertisement) : Screen
+    data class ServiceExplorer(val advertisement: Advertisement) : Screen
+    data class HeartRateDemo(val advertisement: Advertisement) : Screen
+    data object Server : Screen
 }
 
 @Composable
 fun App() {
-    // Wire up structured logging to console
-    LaunchedEffect(Unit) { BleLogConfig.logger = PrintBleLogger() }
-
-    val adapter = remember { BluetoothAdapter() }
+    // enableStateRestoration() is intentionally omitted — it requires UIBackgroundModes
+    // bluetooth-central in Info.plist, which the sample app does not declare.
+    // Apps that need background BLE must call enableStateRestoration() here, before
+    // BluetoothAdapter(), to avoid a race with CBCentralManager lazy initialization.
+    val adapter = remember {
+        BleLogConfig.logger = PrintBleLogger()
+        BluetoothAdapter()
+    }
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Scanner) }
 
     SampleTheme {
@@ -38,9 +44,23 @@ fun App() {
                     when (val screen = currentScreen) {
                         Screen.Scanner -> ScannerScreen(
                             onDeviceSelected = { currentScreen = Screen.DeviceDetail(it) },
+                            onServerTapped = { currentScreen = Screen.Server },
                         )
                         is Screen.DeviceDetail -> DeviceDetailScreen(
                             advertisement = screen.advertisement,
+                            onBack = { currentScreen = Screen.Scanner },
+                            onExploreServices = { currentScreen = Screen.ServiceExplorer(screen.advertisement) },
+                            onHeartRateDemo = { currentScreen = Screen.HeartRateDemo(screen.advertisement) },
+                        )
+                        is Screen.ServiceExplorer -> ServiceExplorerScreen(
+                            advertisement = screen.advertisement,
+                            onBack = { currentScreen = Screen.DeviceDetail(screen.advertisement) },
+                        )
+                        is Screen.HeartRateDemo -> HeartRateDemoScreen(
+                            advertisement = screen.advertisement,
+                            onBack = { currentScreen = Screen.DeviceDetail(screen.advertisement) },
+                        )
+                        Screen.Server -> ServerScreen(
                             onBack = { currentScreen = Screen.Scanner },
                         )
                     }
