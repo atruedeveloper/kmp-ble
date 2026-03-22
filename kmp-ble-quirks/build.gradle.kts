@@ -38,7 +38,7 @@ mavenPublishing {
     pom {
         name.set("kmp-ble-quirks")
         description.set("Curated OEM device quirks for kmp-ble")
-        url.set("https://github.com/atruedeveloper/kmp-ble")
+        url.set("https://github.com/gary-quinn/kmp-ble")
         licenses {
             license {
                 name.set("Apache-2.0")
@@ -47,15 +47,15 @@ mavenPublishing {
         }
         developers {
             developer {
-                id.set("atruedeveloper")
+                id.set("gary-quinn")
                 name.set("Gary Quinn")
                 email.set("gary@atruedev.com")
             }
         }
         scm {
-            url.set("https://github.com/atruedeveloper/kmp-ble")
-            connection.set("scm:git:git://github.com/atruedeveloper/kmp-ble.git")
-            developerConnection.set("scm:git:ssh://github.com/atruedeveloper/kmp-ble.git")
+            url.set("https://github.com/gary-quinn/kmp-ble")
+            connection.set("scm:git:git://github.com/gary-quinn/kmp-ble.git")
+            developerConnection.set("scm:git:ssh://github.com/gary-quinn/kmp-ble.git")
         }
     }
 }
