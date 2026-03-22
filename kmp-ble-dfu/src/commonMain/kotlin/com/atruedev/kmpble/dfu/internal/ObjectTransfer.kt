@@ -3,6 +3,7 @@ package com.atruedev.kmpble.dfu.internal
 import com.atruedev.kmpble.dfu.DfuError
 import com.atruedev.kmpble.dfu.protocol.Crc32
 import com.atruedev.kmpble.dfu.protocol.DfuChecksum
+import com.atruedev.kmpble.dfu.protocol.DfuExtendedError
 import com.atruedev.kmpble.dfu.protocol.DfuObjectInfo
 import com.atruedev.kmpble.dfu.protocol.DfuOpcode
 import com.atruedev.kmpble.dfu.protocol.DfuResultCode
@@ -110,11 +111,18 @@ internal class ObjectTransfer(
 
         val resultCode = response[2].toInt()
         if (resultCode != DfuResultCode.SUCCESS) {
+            val message = if (resultCode == DfuResultCode.EXTENDED_ERROR && response.size >= 4) {
+                val extCode = response[3].toInt() and 0xFF
+                "DFU command 0x${expectedOpcode.toString(16)} failed: " +
+                    "${DfuResultCode.describe(resultCode)} — ${DfuExtendedError.describe(extCode)}"
+            } else {
+                "DFU command 0x${expectedOpcode.toString(16)} failed: " +
+                    DfuResultCode.describe(resultCode)
+            }
             throw DfuError.ProtocolError(
                 opcode = expectedOpcode,
                 resultCode = resultCode,
-                message = "DFU command 0x${expectedOpcode.toString(16)} failed: " +
-                    DfuResultCode.describe(resultCode),
+                message = message,
             )
         }
     }

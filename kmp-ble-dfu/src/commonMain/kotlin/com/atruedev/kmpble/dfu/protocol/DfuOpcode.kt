@@ -56,4 +56,22 @@ internal object DfuExtendedError {
     const val WRONG_SIGNATURE_TYPE = 0x0B
     const val VERIFICATION_FAILED = 0x0C
     const val INSUFFICIENT_SPACE = 0x0D
+
+    fun describe(code: Int): String = when (code) {
+        NO_ERROR -> "No error"
+        INVALID_ERROR_CODE -> "Invalid error code"
+        WRONG_COMMAND_FORMAT -> "Wrong command format"
+        UNKNOWN_COMMAND -> "Unknown command"
+        INIT_COMMAND_INVALID -> "Init command invalid"
+        FW_VERSION_FAILURE -> "FW version failure"
+        HW_VERSION_FAILURE -> "HW version failure"
+        SD_VERSION_FAILURE -> "SD version failure"
+        SIGNATURE_MISSING -> "Signature missing"
+        WRONG_HASH_TYPE -> "Wrong hash type"
+        HASH_FAILED -> "Hash failed"
+        WRONG_SIGNATURE_TYPE -> "Wrong signature type"
+        VERIFICATION_FAILED -> "Verification failed"
+        INSUFFICIENT_SPACE -> "Insufficient space"
+        else -> "Unknown extended error: 0x${code.toString(16)}"
+    }
 }

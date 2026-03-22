@@ -2,6 +2,7 @@ package com.atruedev.kmpble.dfu.internal
 
 import com.atruedev.kmpble.dfu.DfuError
 import com.atruedev.kmpble.dfu.protocol.Crc32
+import com.atruedev.kmpble.dfu.protocol.DfuExtendedError
 import com.atruedev.kmpble.dfu.protocol.DfuObjectType
 import com.atruedev.kmpble.dfu.protocol.DfuOpcode
 import com.atruedev.kmpble.dfu.protocol.DfuResultCode
@@ -9,6 +10,7 @@ import com.atruedev.kmpble.dfu.testing.FakeDfuTransport
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
@@ -135,5 +137,27 @@ class ObjectTransferTest {
         assertFailsWith<DfuError.ProtocolError> {
             transfer.select(DfuObjectType.COMMAND)
         }
+    }
+
+    @Test
+    fun extendedErrorIncludesDetail() = runTest {
+        val transport = FakeDfuTransport(mtu = 20)
+        val transfer = ObjectTransfer(transport, prnInterval = 0)
+
+        launch {
+            transport.enqueueResponse(
+                byteArrayOf(
+                    DfuOpcode.RESPONSE.toByte(),
+                    DfuOpcode.SELECT.toByte(),
+                    DfuResultCode.EXTENDED_ERROR.toByte(),
+                    DfuExtendedError.SIGNATURE_MISSING.toByte(),
+                ) + ByteArray(11)
+            )
+        }
+
+        val error = assertFailsWith<DfuError.ProtocolError> {
+            transfer.select(DfuObjectType.COMMAND)
+        }
+        assertContains(error.message!!, "Signature missing")
     }
 }

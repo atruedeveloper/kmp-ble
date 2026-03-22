@@ -12,5 +12,12 @@ public interface DfuTransport : AutoCloseable {
 
     public suspend fun sendData(data: ByteArray)
 
+    /**
+     * Release transport resources synchronously.
+     *
+     * Implementations must be non-blocking. Both [GattDfuTransport] (no-op) and
+     * [L2capDfuTransport] (delegates to [com.atruedev.kmpble.l2cap.L2capChannel.close])
+     * satisfy this — L2capChannel.close() is synchronous on all platforms.
+     */
     override fun close()
 }
