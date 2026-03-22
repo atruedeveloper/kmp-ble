@@ -94,7 +94,7 @@ tasks.register("assembleXCFramework") {
         val fatDir = fatSim.get().asFile
         fatDir.deleteRecursively()
         simArm64.get().asFile.copyRecursively(fatDir, overwrite = true)
-        exec {
+        project.exec {
             commandLine(
                 "lipo", "-create",
                 File(simArm64.get().asFile, "KmpBle").absolutePath,
@@ -103,7 +103,7 @@ tasks.register("assembleXCFramework") {
             )
         }
 
-        exec {
+        project.exec {
             commandLine(
                 "xcodebuild", "-create-xcframework",
                 "-framework", arm64.get().asFile.absolutePath,
