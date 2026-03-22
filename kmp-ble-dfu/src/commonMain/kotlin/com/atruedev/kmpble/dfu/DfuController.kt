@@ -35,8 +35,8 @@ public class DfuController(
             } finally {
                 activeSession = null
             }
-        } catch (e: DfuError) {
-            emit(DfuProgress.Failed(e))
+        } catch (e: Exception) {
+            if (e is DfuError) emit(DfuProgress.Failed(e)) else throw e
         }
     }
 
@@ -52,12 +52,11 @@ public class DfuController(
     }
 
     private suspend fun createTransport(options: DfuOptions): DfuTransport =
-        if (options.useL2cap) {
-            val psm = options.l2capPsm
-                ?: throw DfuError.TransferFailed("L2CAP PSM must be specified when useL2cap is true")
-            val channel = peripheral.openL2capChannel(psm)
-            L2capDfuTransport(peripheral, channel, options.commandTimeout)
-        } else {
-            GattDfuTransport(peripheral, options.commandTimeout)
+        when (val config = options.transport) {
+            is DfuTransportConfig.Gatt -> GattDfuTransport(peripheral, options.commandTimeout)
+            is DfuTransportConfig.L2cap -> {
+                val channel = peripheral.openL2capChannel(config.psm)
+                L2capDfuTransport(peripheral, channel, options.commandTimeout)
+            }
         }
 }

@@ -1,46 +1,46 @@
 package com.atruedev.kmpble.dfu
 
-public sealed class DfuError(message: String, cause: Throwable? = null) : Exception(message, cause) {
+public sealed interface DfuError {
 
-    public class NotConnected(
-        message: String = "Peripheral is not connected",
-    ) : DfuError(message)
+    public data class NotConnected(
+        override val message: String = "Peripheral is not connected",
+    ) : Exception(message), DfuError
 
-    public class ServiceNotFound(
-        message: String = "DFU service not found on peripheral",
-    ) : DfuError(message)
+    public data class ServiceNotFound(
+        override val message: String = "DFU service not found on peripheral",
+    ) : Exception(message), DfuError
 
-    public class CharacteristicNotFound(
-        public val name: String,
-        message: String = "DFU characteristic not found: $name",
-    ) : DfuError(message)
+    public data class CharacteristicNotFound(
+        val name: String,
+        override val message: String = "DFU characteristic not found: $name",
+    ) : Exception(message), DfuError
 
-    public class ProtocolError(
-        public val opcode: Int,
-        public val resultCode: Int,
-        message: String,
-    ) : DfuError(message)
+    public data class ProtocolError(
+        val opcode: Int,
+        val resultCode: Int,
+        override val message: String,
+    ) : Exception(message), DfuError
 
-    public class ChecksumMismatch(
-        public val expected: UInt,
-        public val actual: UInt,
-    ) : DfuError("CRC32 mismatch: expected 0x${expected.toString(16)}, actual 0x${actual.toString(16)}")
+    public data class ChecksumMismatch(
+        val expected: UInt,
+        val actual: UInt,
+    ) : Exception("CRC32 mismatch: expected 0x${expected.toString(16)}, actual 0x${actual.toString(16)}"), DfuError
 
-    public class TransferFailed(
-        message: String,
-        cause: Throwable? = null,
-    ) : DfuError(message, cause)
+    public data class TransferFailed(
+        override val message: String,
+        override val cause: Throwable? = null,
+    ) : Exception(message, cause), DfuError
 
-    public class FirmwareParseError(
-        message: String,
-        cause: Throwable? = null,
-    ) : DfuError(message, cause)
+    public data class FirmwareParseError(
+        override val message: String,
+        override val cause: Throwable? = null,
+    ) : Exception(message, cause), DfuError
 
-    public class Timeout(
-        message: String = "DFU operation timed out",
-    ) : DfuError(message)
+    public data class Timeout(
+        override val message: String = "DFU operation timed out",
+    ) : Exception(message), DfuError
 
-    public class Aborted(
-        message: String = "DFU was aborted",
-    ) : DfuError(message)
+    public data class Aborted(
+        override val message: String = "DFU was aborted",
+    ) : Exception(message), DfuError
 }

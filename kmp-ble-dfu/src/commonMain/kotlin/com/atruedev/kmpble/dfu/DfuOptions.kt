@@ -8,6 +8,10 @@ public data class DfuOptions(
     val retryCount: Int = 3,
     val retryDelay: Duration = 2.seconds,
     val commandTimeout: Duration = 10.seconds,
-    val useL2cap: Boolean = false,
-    val l2capPsm: Int? = null,
+    val transport: DfuTransportConfig = DfuTransportConfig.Gatt,
 )
+
+public sealed interface DfuTransportConfig {
+    public data object Gatt : DfuTransportConfig
+    public data class L2cap(val psm: Int) : DfuTransportConfig
+}
