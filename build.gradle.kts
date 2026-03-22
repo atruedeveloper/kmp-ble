@@ -36,6 +36,7 @@ kotlin {
 
     jvm()
 
+    val xcf = XCFramework("KmpBle")
     listOf(
         iosArm64(),
         iosSimulatorArm64(),
@@ -44,6 +45,7 @@ kotlin {
         target.binaries.framework {
             baseName = "KmpBle"
             isStatic = true
+            xcf.add(this)
         }
     }
 
@@ -72,34 +74,11 @@ tasks.withType<Zip>().matching { it.name == "bundleAndroidMainAar" }.configureEa
     }
 }
 
-tasks.register<Exec>("assembleXCFramework") {
-    dependsOn(
-        "linkReleaseFrameworkIosArm64",
-        "linkReleaseFrameworkIosSimulatorArm64",
-        "linkReleaseFrameworkIosX64",
-    )
+// Alias for CI: `assembleXCFramework` → Kotlin's built-in task
+tasks.register("assembleXCFramework") {
+    dependsOn("assembleKmpBleReleaseXCFramework")
     group = "build"
     description = "Assembles KmpBle.xcframework from iOS release frameworks"
-
-    val outputDir = layout.buildDirectory.dir("XCFrameworks/release")
-    val arm64 = layout.buildDirectory.dir("bin/iosArm64/releaseFramework/KmpBle.framework")
-    val sim = layout.buildDirectory.dir("bin/iosSimulatorArm64/releaseFramework/KmpBle.framework")
-    val x64 = layout.buildDirectory.dir("bin/iosX64/releaseFramework/KmpBle.framework")
-
-    doFirst {
-        outputDir.get().asFile.let { dir ->
-            dir.deleteRecursively()
-            dir.mkdirs()
-        }
-    }
-
-    commandLine(
-        "xcodebuild", "-create-xcframework",
-        "-framework", arm64.map { it.asFile.absolutePath }.get(),
-        "-framework", sim.map { it.asFile.absolutePath }.get(),
-        "-framework", x64.map { it.asFile.absolutePath }.get(),
-        "-output", outputDir.map { File(it.asFile, "KmpBle.xcframework").absolutePath }.get(),
-    )
 }
 
 mavenPublishing {
