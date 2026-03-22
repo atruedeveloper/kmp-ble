@@ -3,8 +3,6 @@ package com.atruedev.kmpble.profiles.deviceinfo
 import com.atruedev.kmpble.ServiceUuid
 import com.atruedev.kmpble.peripheral.Peripheral
 import com.atruedev.kmpble.scanner.uuidFrom
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlin.uuid.Uuid
 
 private val MANUFACTURER_NAME_UUID = uuidFrom("2A29")
@@ -16,26 +14,17 @@ private val SOFTWARE_REVISION_UUID = uuidFrom("2A28")
 private val SYSTEM_ID_UUID = uuidFrom("2A23")
 private val PNP_ID_UUID = uuidFrom("2A50")
 
-public suspend fun Peripheral.readDeviceInformation(): DeviceInformation = coroutineScope {
+public suspend fun Peripheral.readDeviceInformation(): DeviceInformation {
     val svc = ServiceUuid.DEVICE_INFORMATION
-    val manufacturerName = async { readStringChar(svc, MANUFACTURER_NAME_UUID) }
-    val modelNumber = async { readStringChar(svc, MODEL_NUMBER_UUID) }
-    val serialNumber = async { readStringChar(svc, SERIAL_NUMBER_UUID) }
-    val hardwareRevision = async { readStringChar(svc, HARDWARE_REVISION_UUID) }
-    val firmwareRevision = async { readStringChar(svc, FIRMWARE_REVISION_UUID) }
-    val softwareRevision = async { readStringChar(svc, SOFTWARE_REVISION_UUID) }
-    val systemId = async { readByteChar(svc, SYSTEM_ID_UUID)?.let(::parseSystemId) }
-    val pnpId = async { readByteChar(svc, PNP_ID_UUID)?.let(::parsePnpId) }
-
-    DeviceInformation(
-        manufacturerName = manufacturerName.await(),
-        modelNumber = modelNumber.await(),
-        serialNumber = serialNumber.await(),
-        hardwareRevision = hardwareRevision.await(),
-        firmwareRevision = firmwareRevision.await(),
-        softwareRevision = softwareRevision.await(),
-        systemId = systemId.await(),
-        pnpId = pnpId.await(),
+    return DeviceInformation(
+        manufacturerName = readStringChar(svc, MANUFACTURER_NAME_UUID),
+        modelNumber = readStringChar(svc, MODEL_NUMBER_UUID),
+        serialNumber = readStringChar(svc, SERIAL_NUMBER_UUID),
+        hardwareRevision = readStringChar(svc, HARDWARE_REVISION_UUID),
+        firmwareRevision = readStringChar(svc, FIRMWARE_REVISION_UUID),
+        softwareRevision = readStringChar(svc, SOFTWARE_REVISION_UUID),
+        systemId = readByteChar(svc, SYSTEM_ID_UUID)?.let(::parseSystemId),
+        pnpId = readByteChar(svc, PNP_ID_UUID)?.let(::parsePnpId),
     )
 }
 
